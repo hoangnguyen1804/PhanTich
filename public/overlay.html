@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b0d12">
+  <title>Võ Đài LIVE · Boxing Arena</title>
+  <link rel="stylesheet" href="/css/overlay.css">
+</head>
+<body>
+<div id="stage" role="main" aria-label="Màn hình võ đài dành cho phát trực tiếp">
+  <div class="ambient ambient-red"></div><div class="ambient ambient-blue"></div>
+  <div class="noise"></div>
+  <header class="broadcast-header">
+    <div class="topline"><div class="arena-brand"><svg viewBox="0 0 40 40" aria-hidden="true"><path d="M11 28 6 19Q3 12 9 8L14 5Q19 3 23 8L30 6Q36 7 36 13V24L27 33H15Z"/><path d="m11 27 6-5 10 10-5 5Z"/></svg><span>THE PEOPLE’S ARENA</span></div><div id="modeBadge" class="mode-badge">CHỜ LÊN SÓNG</div></div>
+    <h1 id="arenaTitle">VÕ ĐÀI <span>LIVE</span></h1>
+    <div class="head-bottom"><p>GÕ LỆNH. TUNG ĐÒN. <strong>GIỮ NGÔI.</strong></p><span id="networkBadge" class="network-badge offline"><i></i>ĐANG KẾT NỐI</span></div>
+  </header>
+
+  <section class="match-hud" aria-label="Thông tin trận đấu">
+    <div class="corner red" id="redCorner">
+      <div class="corner-kicker"><span>GÓC ĐỎ</span><span id="redStreak">THÁCH ĐẤU</span></div>
+      <div class="fighter-name"><span id="redAvatar" class="portrait">?</span><h2 id="redName">ĐANG CHỜ</h2></div>
+      <div class="health"><div class="health-ghost" id="redGhost"></div><div class="health-fill" id="redHealth"></div><span id="redHp">— HP</span></div>
+      <div class="secondary-bars"><span><i class="stamina-fill" id="redStamina"></i></span><span><i class="energy-fill" id="redEnergy"></i></span><b id="redEnergyText">0%</b></div>
+      <div class="bar-legends"><span>THỂ LỰC</span><span>NỘI LỰC</span></div>
+    </div>
+    <div class="round-clock"><small id="matchLabel">TRẬN 001</small><strong id="matchClock">02:00</strong><span id="phaseLabel">CHỜ VÕ SĨ</span></div>
+    <div class="corner blue" id="blueCorner">
+      <div class="corner-kicker"><span id="blueStreak">THÁCH ĐẤU</span><span>GÓC XANH</span></div>
+      <div class="fighter-name"><h2 id="blueName">ĐANG CHỜ</h2><span id="blueAvatar" class="portrait">?</span></div>
+      <div class="health"><div class="health-ghost" id="blueGhost"></div><div class="health-fill" id="blueHealth"></div><span id="blueHp">— HP</span></div>
+      <div class="secondary-bars"><b id="blueEnergyText">0%</b><span><i class="energy-fill" id="blueEnergy"></i></span><span><i class="stamina-fill" id="blueStamina"></i></span></div>
+      <div class="bar-legends"><span>NỘI LỰC</span><span>THỂ LỰC</span></div>
+    </div>
+  </section>
+
+  <section class="arena-scene" id="arenaScene" aria-label="Võ đài boxing hoạt hình">
+    <div class="scene-caption"><span class="scene-number">01 / MAIN EVENT</span><span id="matchStatus">VÕ ĐÀI ĐANG MỞ</span></div>
+    <div class="spotlight spotlight-red"></div><div class="spotlight spotlight-blue"></div><div class="horizon-light"></div>
+    <svg class="ring-scene" viewBox="0 0 1000 800" aria-hidden="true">
+      <defs>
+        <linearGradient id="ringFloor" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#232b3b"/><stop offset=".5" stop-color="#141e2b"/><stop offset="1" stop-color="#0d1723"/></linearGradient>
+        <linearGradient id="ringSide" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#263448"/><stop offset="1" stop-color="#080d17"/></linearGradient>
+        <linearGradient id="redRope"><stop stop-color="#ff674d"/><stop offset="1" stop-color="#862b3b"/></linearGradient>
+        <linearGradient id="blueRope"><stop stop-color="#4fe3da"/><stop offset="1" stop-color="#145a72"/></linearGradient>
+        <radialGradient id="floorShine"><stop stop-color="#88a9c8" stop-opacity=".18"/><stop offset="1" stop-color="#79a3cc" stop-opacity="0"/></radialGradient>
+      </defs>
+      <g class="audience" id="audience"></g>
+      <path d="M95 473 491 368 907 473 507 734Z" fill="#010308" opacity=".7" transform="translate(0 35)"/>
+      <path d="M77 479 493 359 925 479 925 530 507 790 77 530Z" fill="url(#ringSide)" stroke="#36405a" stroke-width="2"/>
+      <path d="M77 479 493 359 925 479 507 748Z" fill="url(#ringFloor)" stroke="#566783" stroke-width="2"/>
+      <path d="M125 482 493 378 873 482 508 718Z" fill="none" stroke="#6c819f" stroke-opacity=".19" stroke-width="2"/>
+      <ellipse cx="500" cy="535" rx="330" ry="125" fill="url(#floorShine)"/>
+      <g transform="translate(505 536) rotate(-12) skewX(22)"><path d="M-98-30H-42L-10 25 20-30H77L10 72H-36Z" fill="#53637c" opacity=".3"/><text x="-13" y="102" fill="#72829a" font-size="17" font-family="system-ui" font-weight="900" letter-spacing="8" text-anchor="middle">VÕ ĐÀI LIVE</text></g>
+      <g class="rear-ropes"><path d="M92 315 493 234 909 315M92 360 493 275 909 360M92 407 493 317 909 407" fill="none" stroke="#31455e" stroke-width="6"/><path d="M92 315 493 234" fill="none" stroke="url(#redRope)" stroke-width="7"/><path d="M493 234 909 315" fill="none" stroke="url(#blueRope)" stroke-width="7"/></g>
+      <path d="M482 220H504V374H482Z" fill="#182638" stroke="#5b6b84" stroke-width="3"/><path d="M480 228H508V261H480Z" fill="#d5deed"/><path d="M85 305H105V489H85Z" fill="#38232c" stroke="#ff694e" stroke-width="3"/><path d="M888 305H909V489H888Z" fill="#132f3c" stroke="#45e7df" stroke-width="3"/>
+    </svg>
+    <div class="fighter-mount" id="fighters"></div>
+    <svg class="front-ropes" viewBox="0 0 1000 800" aria-hidden="true"><path d="M93 344 508 566 899 344M93 392 508 616 899 392M93 440 508 667 899 440" fill="none" stroke="#8495b2" stroke-opacity=".48" stroke-width="6"/><path d="M93 344 508 566 899 344" fill="none" stroke="#b1bfd2" stroke-opacity=".5" stroke-width="4"/><path d="M496 553H521V753H496Z" fill="#152236" stroke="#627695" stroke-width="3"/><path d="M491 562H527V611H491Z" fill="#dae2ed"/><text x="509" y="595" text-anchor="middle" font-size="22" font-weight="900" fill="#172435">VĐ</text></svg>
+    <div id="combatFx" class="combat-fx" aria-hidden="true"></div>
+    <div class="center-state" id="centerState"><span class="state-eyebrow" id="centerEyebrow">SÂN KHẤU CỦA BẠN</span><strong id="centerTitle">AI SẼ<br>LÀ NHÀ VÔ ĐỊCH?</strong><p id="centerNote">Tặng quà để đăng ký lên đài.</p></div>
+    <div class="impact-flash" id="impactFlash"></div>
+    <div class="scene-bottom"><span><i></i>NGƯỜI THẮNG GIỮ ĐÀI</span><span id="sceneStats">0 CÚ ĐẤM · 0 TRẬN</span></div>
+  </section>
+
+  <section class="commentator"><div class="mic-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"/></svg></div><div><div class="mc-kicker">BÌNH LUẬN VIÊN <span id="mcSpeaking">● SẴN SÀNG</span></div><p id="mcCaption" aria-live="polite">Võ đài đã sẵn sàng. Nhà vô địch tiếp theo có thể là bạn.</p></div><div class="waveform" id="voiceWave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div></section>
+
+  <section class="command-guide" id="commandGuide"><div class="guide-title"><span id="guideTitle">BÀN PHÍM CỦA BẠN LÀ <b>VŨ KHÍ</b></span><small id="guideNote">BÌNH LUẬN ĐỂ RA ĐÒN</small></div><div class="command-grid" id="commandGrid"><span><kbd>đấm</kbd><small>ĐẤM THẲNG</small></span><span><kbd>móc</kbd><small>ĐẤM MÓC</small></span><span><kbd>đá</kbd><small>CÚ ĐÁ</small></span><span><kbd>đỡ</kbd><small>PHÒNG THỦ</small></span><span><kbd>né</kbd><small>NÉ ĐÒN</small></span><span class="ultimate-command"><kbd>combo</kbd><small>38 THỂ LỰC</small></span></div><div id="giftGuide" class="gift-guide" hidden></div></section>
+
+  <div class="bottom-grid">
+    <section class="queue-card"><div class="panel-heading"><h3>CHỜ THÁCH ĐẤU</h3><span id="queueCount">00</span></div><ol id="queueList"><li class="list-empty">Vị trí tiếp theo dành cho bạn.</li></ol><div id="entryHint" class="entry-hint">TẶNG QUÀ ĐỂ LÊN ĐÀI ↗</div></section>
+    <section class="ranking-card"><div class="panel-heading"><h3>HALL OF FAME</h3><span>TOP 3</span></div><ol id="rankingList"><li class="list-empty">Tên bạn sẽ xuất hiện ở đây.</li></ol></section>
+  </div>
+  <footer class="overlay-footer"><span>VÕ ĐÀI LIVE <b>/</b> BOXING ARENA</span><span>VÀO ĐÀI BẰNG QUÀ · CHIẾN THẮNG BẰNG KỸ NĂNG</span></footer>
+</div>
+<button id="soundUnlock" class="sound-unlock" type="button" aria-label="Bật âm thanh võ đài"><span>♫</span> BẬT ÂM THANH <small>Chạm một lần để nghe MC và hiệu ứng</small></button>
+<script type="module" src="/js/overlay.js"></script>
+</body>
+</html>

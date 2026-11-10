@@ -1,0 +1,12 @@
+node_modules/
+data/
+nhac/*
+!nhac/README.md
+.cache/
+dist/
+evidence/
+.env
+*.log
+__pycache__/
+artifacts/
+screenshots/
