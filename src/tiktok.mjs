@@ -63,15 +63,21 @@ export function createGiftAggregator({ emit, findGift = () => null, logger = () 
     const additional = Math.max(0, entry.count - entry.charged);
     if (!additional) return;
     const before = entry.charged;
-    entry.charged = entry.count;
-    entry.updated = now();
     const coins = Math.min(100_000_000, additional * entry.unitCoins);
     if (coins <= 0) {
       logger(`Chưa biết giá quà ${entry.giftName}. Chưa tính xu; cập nhật danh sách quà để nhận đúng giá.`);
       return;
     }
+    entry.charged = entry.count;
+    entry.updated = now();
     emit?.('gift', {
       ...entry.user, count: additional, coins,
+      // One paid streak can activate a corner rule only once. If a timeout
+      // already charged its then-known total, late packets only reconcile
+      // newly observed coins; their delta must not activate another corner.
+      isStreakCorrection: before > 0,
+      streakCoins: Math.min(100_000_000, entry.count * entry.unitCoins),
+      supportGroupId: entry.key,
       giftId: entry.giftId, giftName: entry.giftName,
       eventId: `tt-gift:${entry.key}:${before}-${entry.charged}`,
       completion: reason,

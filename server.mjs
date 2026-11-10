@@ -11,7 +11,7 @@ import {createAuth,createHttp,isLocal,lanIps} from './src/http.mjs';
 import {catalog,findGift,refreshCatalog} from './src/catalog.mjs';
 
 const releaseInstance=lockInstance();
-const VERSION='1.0.0',config=loadConfig(),store=createStore();
+const VERSION='1.1.0',config=loadConfig(),store=createStore();
 if(process.env.ARENA_PHONE==='1')config.phoneEnabled=true;
 const offline=process.env.ARENA_OFFLINE==='1';
 let port=Number(process.env.PORT)||Number(config.port)||3100,arena,audio,tiktok,wss,demoTimer=null,stopping=false,rebinding=false;
@@ -26,8 +26,11 @@ arena.command('settings.set',{settings:{phoneEnabled:config.phoneEnabled}});
 audio=createAudio({dataDir:DATA,musicDir:MUSIC,onEvent:e=>send(e),getSettings:()=>arena.snapshot().settings,offline,logger});
 tiktok=createTikTok({onEvent:(kind,payload)=>{try{arena.ingest(kind,payload,{source:'live'});}catch(e){logger(e.message);}},onStatus:s=>{send({type:'connection',...s});logger(s.status==='connected'?`Đã nhận LIVE @${s.uniqueId}`:s.error||`TikTok: ${s.status}`);},getSignKey:()=>config.signApiKey||'',findGift,offline,logger});
 const auth=createAuth(config,()=>port);
-const giftMenu=()=>Object.entries(arena.snapshot().settings.giftMap||{}).slice(0,30).map(([id,action])=>{const g=findGift(id),a=ENGINE_GIFT_ACTIONS.find(x=>x.id===action);return g&&a?{id,name:g.name,coins:g.coins,action,label:a.label,emoji:a.emoji}:null;}).filter(Boolean);
-const snapshot=()=>({...arena.snapshot(),giftMenu:giftMenu(),app:{name:'VÕ ĐÀI LIVE',version:VERSION,noLicense:true},connection:{...tiktok.status(),hasSignKey:!!config.signApiKey},demo:{running:!!demoTimer},music:audio.music(),audio:{...audio.status?.(),offline},logs:logs.slice(-80)});
+const giftMenu=state=>(state.settings.cornerGifts||[]).map((rule,index)=>{
+ const action=ENGINE_GIFT_ACTIONS.find(x=>x.id===rule.action);
+ return action?{id:`coins-${rule.side}-${rule.coins}`,side:rule.side,coins:rule.coins,action:rule.action,label:action.label,emoji:action.emoji,name:`${rule.coins} xu`}:null;
+}).filter(Boolean);
+const snapshot=()=>{const state=arena.snapshot();return {...state,giftMenu:giftMenu(state),app:{name:'VÕ ĐÀI LIVE',version:VERSION,noLicense:true},connection:{...tiktok.status(),hasSignKey:!!config.signApiKey},demo:{running:!!demoTimer},music:audio.music(),audio:{...audio.status?.(),offline},logs:logs.slice(-80)};};
 function publish(){send({type:'state',state:snapshot()});}
 const safeText=(value,max=60)=>String(value??'').normalize('NFKC').replace(/[\u0000-\u001f\u007f\u200b-\u200f\u202a-\u202e]/g,'').trim().slice(0,max);
 function stopDemo(){if(demoTimer){clearInterval(demoTimer);demoTimer=null;logger('Đã dừng demo tự động.');}}
@@ -42,7 +45,7 @@ async function startDemo(){
    if(m.phase!=='fighting')return;
    const side=count++%2?'red':'blue',fighter=m.fighters[side];if(!fighter)return;
    const moves=['đấm','móc','đấm','đỡ','đấm bốc','né','đá'];
-   if(count%6===0)arena.ingest('gift',{uid:fighter.uid,name:fighter.name,coins:[5,10,30][count%3],giftName:'Quà demo',eventId:`demo-${Date.now()}-${count}`},{source:'demo'});
+   if(count%6===0){const rules=s.settings.cornerGifts||[],rule=rules[(Math.floor(count/6)-1)%Math.max(1,rules.length)];arena.ingest('gift',{uid:'demo_audience',name:'Khán giả cổ vũ',coins:rule?.coins||5,giftName:'Quà cổ vũ',eventId:`demo-${Date.now()}-${count}`},{source:'demo'});}
    else arena.ingest('chat',{uid:fighter.uid,name:fighter.name,text:moves[count%moves.length]},{source:'demo'});
   }catch(e){logger(`Demo: ${e.message}`);}
  },850);demoTimer.unref();
@@ -97,7 +100,7 @@ async function dispatch(method,p={}){
    const key=String(p.key??'').trim();if(key&&!/^[A-Za-z0-9._\-=+/]{8,300}$/.test(key))throw new Error('Key dịch vụ có định dạng không hợp lệ.');
    config.signApiKey=key;saveConfig(config);return {hasKey:!!key};
   }
-  case 'gift.catalog':return {...catalog(),actions:ENGINE_GIFT_ACTIONS,map:arena.snapshot().settings.giftMap};
+  case 'gift.catalog':return {...catalog(),actions:ENGINE_GIFT_ACTIONS,map:arena.snapshot().settings.giftMap,cornerGifts:arena.snapshot().settings.cornerGifts};
   case 'gift.refresh':return refreshCatalog();
   case 'gift.map':{
    if(!p.map||typeof p.map!=='object'||Array.isArray(p.map))throw new Error('Bảng gán quà không hợp lệ.');
@@ -106,8 +109,9 @@ async function dispatch(method,p={}){
   }
   case 'music.list':return audio.music();
   case 'music.delete':return audio.deleteMusic(p.name);
-  case 'mc.say':await audio.say(safeText(p.text,300));return {ok:true};
-  case 'mc.test':await audio.say('Chào mừng đến với Võ Đài LIVE! Hai góc đài đã sẵn sàng. Bình luận đấm, móc, né để ra đòn.');return {ok:true};
+  case 'mc.say':{const result=audio.say(safeText(p.text,300));if(result?.queued===false)throw new Error('Chưa có nội dung đọc hoặc hàng đợi giọng đang đầy.');return result;}
+  case 'mc.test':return audio.say('Sẵn sàng chưa cả nhà! Góc đỏ áp sát, góc xanh dựng găng! Một cú móc cực mạnh! Ai sẽ trở thành nhà vô địch của Võ Đài LIVE hôm nay?');
+  case 'mc.status':return audio.status();
   case 'obs.links':return obsLinks();
   case 'phone.set':return changePhone(p.on);
   case 'obs.open':return openObs();
@@ -132,7 +136,7 @@ async function one(req){
  try{const result=await dispatch(req.method,req.params??{});publish();return reply({result:result??{ok:true}});}catch(e){return reply({error:{code:e.rpcCode||-32602,message:String(e.message||e).slice(0,300)}});}
 }
 async function handleRpc(msg){if(Array.isArray(msg)){if(!msg.length||msg.length>20)return {jsonrpc:'2.0',id:null,error:{code:-32600,message:'Batch nhận từ 1 đến 20 lệnh.'}};const result=[];for(const req of msg){const r=await one(req);if(r)result.push(r);}return result.length?result:null;}return one(msg);}
-const server=createHttp({auth,getPort:()=>port,handleRpc,audio:()=>audio,exportState:()=>arena.export()});
+const server=createHttp({auth,getPort:()=>port,handleRpc,audio:()=>audio,exportState:()=>arena.export(),version:VERSION});
 wss=new WebSocketServer({server,path:'/ws',maxPayload:65536,verifyClient:({req,origin})=>{if(!auth.goodHost(req.headers.host)||!auth.goodOrigin(origin))return false;const url=new URL(req.url,'http://local');return url.searchParams.get('role')!=='control'||auth.authorized(req,url);}});
 wss.on('connection',(ws,req)=>{
  ws.on('error',()=>{logger('Đã đóng một kết nối WebSocket có dữ liệu không hợp lệ.');});

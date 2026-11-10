@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createArena } from '../src/arena.mjs';
+import { createArena, DEFAULT_CORNER_GIFTS } from '../src/arena.mjs';
 
 function harness({ settings = {}, initial = {}, random = () => .5 } = {}) {
   let time = 1_000_000;
   const events = [], saves = [];
-  const arena = createArena({ initial: { ...initial, settings: { autoNext: false, countdownSeconds: 0, ...initial.settings, ...settings } }, now: () => time, random, onEvent: e => events.push(e), onSave: s => saves.push(s) });
+  const arena = createArena({ initial: { ...initial, settings: { autoNext: false, autoSparring:false,maxHp:1000,cornerGifts:[],countdownSeconds: 0, ...initial.settings, ...settings } }, now: () => time, random, onEvent: e => events.push(e), onSave: s => saves.push(s) });
   const user = (uid, rest = {}) => ({ uid, name: uid, ...rest });
   return { arena, events, saves, user, advance: ms => { time += ms; return arena.tick(); },
     chat: (uid, text) => arena.ingest('chat', user(uid, { text })),
@@ -108,7 +108,7 @@ test('stamina is finite, regenerates, and ultimate requires earned energy', () =
 test('spectator corner selection routes gifts to a fighter instead of queue admission', () => {
   const h = harness(); h.ready();
   assert.equal(h.chat('Fan', 'xanh').support, 'blue');
-  const gift = h.gift('Fan', 5);
+  const gift = h.gift('Fan', 5);h.advance(1400);
   assert.equal(gift.side, 'blue'); assert.equal(gift.move, 'flurry');
   assert.ok(hp(h, 'red') < 1000); assert.equal(hp(h, 'blue'), 1000);
   assert.equal(h.arena.snapshot().queue.length, 0);
@@ -129,8 +129,8 @@ test('gift event IDs are idempotent per donor and do not multiply total coins tw
 
 test('hard gift damage ceiling still applies to critical paid moves', () => {
   const h = harness({ settings: { giftDamageCap: 80 }, random: () => 0 }); h.ready();
-  const result = h.gift('A', 1000000);
-  assert.ok(result.damage <= 80); assert.equal(hp(h, 'blue'), 920);
+  h.gift('A', 1000000);h.advance(2400);
+  const result=h.events.findLast(e=>e.type==='hit');assert.ok(result.damage <= 80); assert.equal(hp(h, 'blue'), 920);
 });
 
 test('gift mapping supports heal and shield without exceeding maximum HP', () => {
@@ -144,7 +144,7 @@ test('gift mapping supports heal and shield without exceeding maximum HP', () =>
 
 test('KO creates one result and awards a winner exactly once', () => {
   const h = harness({ settings: { maxHp: 100, giftDamageCap: 1000 } }); h.ready();
-  h.gift('B', 100);
+  h.gift('B', 100);h.advance(2400);
   const s = h.arena.snapshot(); assert.equal(s.match.phase, 'finished'); assert.equal(s.match.result.winner, 'blue');
   assert.equal(s.stats.matches, 1); assert.equal(s.leaderboard.find(r => r.uid === 'B').wins, 1);
   assert.equal(s.leaderboard.find(r => r.uid === 'B').kos, 1);
@@ -155,11 +155,11 @@ test('KO creates one result and awards a winner exactly once', () => {
 
 test('winning fighter stays and queued challenger rotates into next match', () => {
   const h = harness({ settings: { maxHp: 100, giftDamageCap: 1000, autoNext: true, holdWinnerSeconds: 2 } }); h.ready();
-  h.arena.command('queue.add', h.user('C')); h.gift('B', 100);
+  h.arena.command('queue.add', h.user('C')); h.gift('B', 100);h.advance(2400);
   h.advance(2100); const s = h.arena.snapshot();
   assert.equal(s.match.phase, 'fighting'); assert.equal(s.match.number, 2);
-  assert.equal(s.match.fighters.red.uid, 'B'); assert.equal(s.match.fighters.blue.uid, 'C');
-  assert.equal(s.match.fighters.red.hp, 100); assert.equal(s.match.fighters.red.streak, 1);
+  assert.equal(s.match.fighters.blue.uid, 'B'); assert.equal(s.match.fighters.red.uid, 'C');
+  assert.equal(s.match.fighters.blue.hp, 100); assert.equal(s.match.fighters.blue.streak, 1);
   assert.ok(!s.queue.some(x => x.uid === 'A'));
 });
 
@@ -178,14 +178,15 @@ test('combat pause freezes clock, attacks and defensive windows', () => {
   assert.equal(h.chat('A', 'đấm').reason, 'not_fighting');
   h.advance(60000); assert.equal(h.arena.snapshot().match.remainingMs, 29900);
   h.arena.command('match.resume'); assert.equal(h.chat('A', 'đấm').blocked, true);
-  h.advance(29900); assert.equal(h.arena.snapshot().match.phase, 'finished');
+  h.advance(29900); assert.equal(h.arena.snapshot().match.phase, 'rest');
 });
 
-test('time limit awards healthier fighter and equal scores create a draw', () => {
-  const a = harness({ settings: { roundSeconds: 15 } }); a.ready(); a.chat('A', 'đấm'); a.advance(15000);
-  assert.equal(a.arena.snapshot().match.result.winner, 'red'); assert.equal(a.arena.snapshot().match.result.reason, 'time');
-  const b = harness({ settings: { roundSeconds: 15 } }); b.ready(); b.advance(15000);
-  assert.equal(b.arena.snapshot().match.result.winner, null);
+test('round time never awards a winner or draw, and rest leads to the next round', () => {
+  const h=harness({settings:{roundSeconds:15,restSeconds:2}});h.ready();h.chat('A','đấm');h.advance(15000);
+  let m=h.arena.snapshot().match;assert.equal(m.phase,'rest');assert.equal(m.result,null);assert.equal(m.round,1);
+  h.advance(2000);m=h.arena.snapshot().match;assert.equal(m.phase,'fighting');assert.equal(m.round,2);assert.equal(m.result,null);
+  assert.throws(()=>h.arena.command('match.finish',{winner:null}),/không có kết quả hòa/);
+  assert.throws(()=>h.arena.command('match.finish',{}),/không có kết quả hòa/);
 });
 
 test('match reset cancels all prior timers and waits for manual restart', () => {
@@ -267,9 +268,104 @@ test('malformed monetary events never grant admission, coins or consume valid de
   assert.equal(h.gift('A', 1, { eventId: 'bad-then-valid' }).queued, true);
 });
 
-test('a drawn match rotates to two queued challengers without requiring a winner', () => {
-  const h = harness(); h.ready();
-  h.arena.command('queue.add', h.user('C')); h.arena.command('queue.add', h.user('D'));
-  h.arena.command('match.finish', { winner: null }); h.arena.command('match.start');
-  const s = h.arena.snapshot(); assert.equal(s.match.fighters.red.uid, 'C'); assert.equal(s.match.fighters.blue.uid, 'D');
+test('manual finish requires one winner and retains that champion for the next challenger', () => {
+  const h=harness();h.ready();h.arena.command('queue.add',h.user('C'));
+  assert.throws(()=>h.arena.command('match.finish',{winner:null}));assert.equal(h.arena.snapshot().match.phase,'fighting');
+  h.arena.command('match.finish',{winner:'blue'});h.arena.command('match.start');
+  assert.equal(h.arena.snapshot().match.fighters.blue.uid,'B');assert.equal(h.arena.snapshot().match.fighters.red.uid,'C');
 });
+
+test('new installation defaults to 1600 HP and exact routed corner gifts',()=>{
+ const a=createArena();assert.equal(a.snapshot().settings.maxHp,1600);assert.deepEqual(a.snapshot().settings.cornerGifts,DEFAULT_CORNER_GIFTS);
+});
+test('exact coin amount routes any spectator without selection or admission',()=>{
+ const h=harness({settings:{cornerGifts:DEFAULT_CORNER_GIFTS}});h.ready();
+ const gift=h.gift('Outsider',6);assert.equal(gift.side,'blue');assert.equal(gift.move,'flurry');assert.equal(h.arena.snapshot().queue.length,0);
+ assert.equal(hp(h,'red'),1000);const start=h.events.findLast(e=>e.type==='attack.start');assert.equal(start.side,'blue');
+ h.advance(1400);assert.ok(hp(h,'red')<1000);assert.equal(hp(h,'blue'),1000);
+});
+test('exact route overrides donor fighter side, selected corner and gift ID map',()=>{
+ const h=harness({settings:{cornerGifts:DEFAULT_CORNER_GIFTS,giftMap:{123:'heal'}}});h.ready();h.chat('B','xanh');
+ const g=h.gift('B',5,{giftId:123});assert.equal(g.side,'red');assert.equal(g.move,'flurry');h.advance(1400);assert.ok(hp(h,'blue')<1000);assert.equal(hp(h,'red'),1000);
+});
+test('coin routes compare total event coins exactly, never multiplied by repeat count',()=>{
+ const h=harness({settings:{cornerGifts:DEFAULT_CORNER_GIFTS}});h.ready();
+ const x=h.gift('Outsider',11,{count:6});assert.equal(x.queued,true);assert.equal(h.arena.snapshot().queue.length,1);assert.equal(h.events.filter(e=>e.type==='attack.start').length,0);
+ const y=h.gift('Other',6,{count:999});assert.equal(y.side,'blue');assert.equal(h.arena.snapshot().stats.coins,17);
+});
+test('late combo correction credits coins once without routing opposite corner or admitting again',()=>{
+ const h=harness({settings:{cornerGifts:DEFAULT_CORNER_GIFTS}});h.ready();h.gift('Fan',5,{eventId:'initial'});
+ const result=h.gift('Fan',6,{eventId:'correction',streakCoins:11,isStreakCorrection:true});
+ assert.equal(result.creditedOnly,true);assert.equal(h.arena.snapshot().stats.coins,11);assert.equal(h.arena.snapshot().queue.length,0);
+ assert.equal(h.events.filter(e=>e.type==='attack.start').length,1);assert.equal(h.events.find(e=>e.type==='attack.start').side,'red');
+ assert.equal(h.gift('Fan',6,{eventId:'correction',isStreakCorrection:true}).reason,'duplicate');assert.equal(h.arena.snapshot().stats.coins,11);
+});
+test('duplicate or malformed route settings are rejected atomically',()=>{
+ const h=harness({settings:{cornerGifts:DEFAULT_CORNER_GIFTS}});const before=h.arena.snapshot().settings;
+ for(const cornerGifts of [[{coins:5,side:'red',action:'heal'},{coins:5,side:'blue',action:'flurry'}],[{coins:5.5,side:'red',action:'heal'}],[{coins:5,side:'green',action:'heal'}],[{coins:5,side:'red',action:'entry'}],Array(33).fill({coins:4,side:'red',action:'heal'})]){
+  assert.throws(()=>h.arena.command('settings.set',{settings:{maxHp:333,cornerGifts}}));assert.deepEqual(h.arena.snapshot().settings,before);
+ }
+ const result=h.arena.command('settings.set',{settings:{cornerGifts:[{coins:42,side:'blue',action:'boost'}]}});result.cornerGifts[0].side='red';assert.equal(h.arena.snapshot().settings.cornerGifts[0].side,'blue');
+});
+test('big attack windup precedes damage and final hit matches animation sequence',()=>{
+ const h=harness({settings:{cornerGifts:DEFAULT_CORNER_GIFTS}});h.ready();const g=h.gift('Fan',30);
+ assert.equal(g.durationMs,2400);assert.equal(h.events.filter(e=>e.type==='hit').length,0);h.advance(2399);assert.equal(hp(h,'blue'),1000);
+ h.advance(1);const hit=h.events.findLast(e=>e.type==='hit');assert.equal(hit.sequenceId,g.sequenceId);assert.equal(hit.choreographed,true);assert.ok(hit.damage>0);
+});
+test('pending big attacks pause exactly and cannot apply during pause',()=>{
+ const h=harness({settings:{cornerGifts:DEFAULT_CORNER_GIFTS}});h.ready();h.gift('Fan',30);h.advance(1000);h.arena.command('match.pause');
+ h.advance(60000);assert.equal(hp(h,'blue'),1000);h.arena.command('match.resume');h.advance(1399);assert.equal(hp(h,'blue'),1000);h.advance(1);assert.ok(hp(h,'blue')<1000);
+});
+test('same-corner support queues after current animation, with FIFO execution',()=>{
+ const h=harness({settings:{cornerGifts:DEFAULT_CORNER_GIFTS}});h.ready();h.gift('Fan',30);const queued=h.gift('Other',5);assert.equal(queued.queued,true);
+ h.advance(2400);const after=hp(h,'blue');assert.equal(h.events.filter(e=>e.type==='attack.start').length,2);h.advance(1399);assert.equal(hp(h,'blue'),after);h.advance(1);assert.ok(hp(h,'blue')<after);
+});
+test('support queue is bounded and reset discards every old sequence and pending effect',()=>{
+ const h=harness({settings:{cornerGifts:DEFAULT_CORNER_GIFTS}});h.ready();h.gift('Fan',30);
+ for(let i=0;i<12;i++)assert.equal(h.gift('Fan'+i,5).queued,true);
+ assert.equal(h.gift('Overflow',5).reason,'support_queue_full');assert.equal(h.arena.snapshot().match.supportQueue,12);
+ h.arena.command('match.reset');h.arena.command('match.start');h.advance(5000);assert.equal(hp(h,'blue'),1000);assert.equal(h.arena.snapshot().match.activeActions.length,0);assert.equal(h.arena.snapshot().match.supportQueue,0);
+});
+test('support during countdown and rest is delayed and tied to the current match',()=>{
+ const h=harness({settings:{cornerGifts:DEFAULT_CORNER_GIFTS,countdownSeconds:1,roundSeconds:15,restSeconds:2}});h.ready();
+ assert.equal(h.gift('Fan',5).queued,true);assert.equal(h.events.filter(e=>e.type==='attack.start').length,0);
+ h.advance(1000);h.advance(1);assert.equal(h.events.filter(e=>e.type==='attack.start').length,1);h.advance(1400);assert.ok(hp(h,'blue')<1000);
+ h.advance(14000);assert.equal(h.arena.snapshot().match.phase,'rest');const before=hp(h,'red');h.gift('Fan',6);h.advance(1999);assert.equal(hp(h,'red'),before);h.advance(1);h.advance(1);h.advance(1400);assert.ok(hp(h,'red')<before);
+});
+test('power boost refreshes a capped multiplier and expires after active paused time',()=>{
+ const h=harness({settings:{cornerGifts:DEFAULT_CORNER_GIFTS}});h.ready();h.gift('Fan',99);h.gift('Other',99);
+ assert.equal(h.arena.snapshot().match.fighters.red.powerMultiplier,1.3);assert.equal(h.chat('A','đấm').damage,47);
+ h.advance(1000);h.arena.command('match.pause');h.advance(60000);assert.equal(h.arena.snapshot().match.fighters.red.buffRemainingMs,11000);assert.equal(h.arena.snapshot().match.fighters.red.powerMultiplier,1.3);
+ h.arena.command('match.resume');h.advance(11001);assert.equal(h.arena.snapshot().match.fighters.red.powerMultiplier,1);assert.equal(h.chat('A','đấm').damage,36);
+});
+test('healing has a per-side ten-second budget, cannot overflow HP, and pause freezes budget',()=>{
+ const h=harness({settings:{cornerGifts:DEFAULT_CORNER_GIFTS}});h.ready();h.gift('Fan',6);h.advance(1400);h.gift('Fan',6);h.advance(1400);
+ assert.equal(hp(h,'red'),780);assert.equal(h.gift('Fan',10).healed,150);assert.equal(h.gift('Fan',10).healed,0);
+ h.arena.command('match.pause');h.advance(20000);h.arena.command('match.resume');assert.equal(h.gift('Fan',10).healed,0);
+ h.advance(10001);assert.equal(h.gift('Fan',10).healed,70);assert.equal(hp(h,'red'),1000);
+});
+test('low-health comeback shield activates once and mitigates the next pressure',()=>{
+ const h=harness({settings:{maxHp:200,cornerGifts:DEFAULT_CORNER_GIFTS}});h.ready();h.gift('Fan',30);h.advance(2400);
+ let b=h.arena.snapshot().match.fighters.blue;assert.equal(b.hp,25);assert.equal(b.comebackUsed,true);assert.equal(b.guardRemainingMs,8000);
+ const hit=h.chat('A','đấm');assert.equal(hit.damage,24);assert.equal(hp(h,'blue'),1);assert.equal(h.events.filter(e=>e.type==='comeback').length,1);
+});
+test('round pressure grows after two rounds and rests never end a match by score',()=>{
+ const h=harness({settings:{roundSeconds:15,restSeconds:2}});h.ready();
+ for(let i=0;i<2;i++){h.advance(15000);assert.equal(h.arena.snapshot().match.result,null);h.advance(2000);}
+ const m=h.arena.snapshot().match;assert.equal(m.round,3);assert.equal(m.overtime,true);assert.equal(m.pressure,1.4);assert.equal(m.phase,'fighting');
+ h.advance(15000);assert.equal(h.arena.snapshot().match.phase,'rest');h.arena.command('match.finish',{winner:'red'});assert.equal(h.arena.snapshot().match.result.winner,'red');
+});
+test('gentle autopilot keeps an idle arena fighting until a single KO winner',()=>{
+ const h=harness({settings:{autoSparring:true,roundSeconds:15,restSeconds:2}});h.ready();
+ for(let i=0;i<3000&&h.arena.snapshot().match.phase!=='finished';i++)h.advance(250);
+ const s=h.arena.snapshot();assert.equal(s.match.phase,'finished');assert.ok(['red','blue'].includes(s.match.result.winner));assert.equal(s.match.result.reason,'ko');assert.ok(h.events.some(e=>e.type==='hit'&&e.auto));assert.ok(s.match.round>1);
+});
+
+ test('continuous paid healing cannot lock the arena forever: late fatigue resolves KO within ten minutes',()=>{
+ const h=harness({settings:{maxHp:1600,autoSparring:true,roundSeconds:120,restSeconds:8,cornerGifts:DEFAULT_CORNER_GIFTS}});h.ready();
+ for(let i=0;i<2400&&h.arena.snapshot().match.phase!=='finished';i++){
+  if(i%4===0){h.gift('Red supporter',10,{eventId:'r'+i});h.gift('Blue supporter',20,{eventId:'b'+i});}
+  h.advance(250);
+ }
+ const s=h.arena.snapshot();assert.equal(s.match.phase,'finished');assert.equal(s.match.result.reason,'ko');assert.ok(['red','blue'].includes(s.match.result.winner));assert.ok(s.match.round<=5);
+ });

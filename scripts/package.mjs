@@ -5,6 +5,7 @@ import crypto from 'node:crypto';
 import {deflateRawSync} from 'node:zlib';
 import {fileURLToPath} from 'node:url';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
+const version=JSON.parse(fs.readFileSync(path.join(root,'package.json'),'utf8')).version;
 const args=process.argv.slice(2),arg=name=>{const i=args.indexOf(name);return i<0?null:args[i+1];};
 const runtime=arg('--runtime'),portable=args.includes('--portable')||!!runtime;
 if(portable&&!runtime)throw new Error('Dùng --runtime /đường/dẫn/node.exe để tạo portable Windows.');
@@ -19,7 +20,7 @@ if(portable){collect(path.join(root,'node_modules'),'node_modules');collect(path
 const crcTable=Uint32Array.from({length:256},(_,n)=>{let c=n;for(let k=0;k<8;k++)c=(c&1)?0xedb88320^(c>>>1):c>>>1;return c>>>0;});
 const crc32=b=>{let c=0xffffffff;for(const x of b)c=crcTable[(c^x)&255]^(c>>>8);return (c^0xffffffff)>>>0;};
 const dist=path.join(root,'dist');fs.mkdirSync(dist,{recursive:true});
-const out=path.join(dist,portable?'VoDaiLive-1.0.0-Windows-Portable.zip':'VoDaiLive-1.0.0-Source.zip');
+const out=path.join(dist,portable?`VoDaiLive-${version}-Windows-Portable.zip`:`VoDaiLive-${version}-Source.zip`);
 const fd=fs.openSync(out,'w'),central=[];let offset=0;const write=b=>{fs.writeSync(fd,b);offset+=b.length;};
 try{
  for(const entry of entries){

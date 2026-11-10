@@ -21,11 +21,17 @@ for(let row=0;row<4;row++)for(let i=0;i<35;i++){
 }
 const fighters=createFighters($('fighters'));
 let current=null,connected=false,clockOffset=0,lastMatchId='',lastPhase='',muted=preview,localCaptionAt=0;
-const timerHandles=new Set();
+const timerHandles=new Set();let effectsPaused=false;const frozenAnimations=new Set();
 const sound=createSound({
  onCaption(text,info={}){
   if(text){$('mcCaption').textContent=text;localCaptionAt=Date.now();}
-  $('voiceWave').classList.toggle('speaking',!!info.speaking);$('mcSpeaking').textContent=info.speaking?'● ĐANG BÌNH LUẬN':'● SẴN SÀNG';
+  $('voiceWave').classList.toggle('speaking',!!info.speaking);if(info.warning){$('mcSpeaking').textContent='● CHỈ HIỆN CHỮ · THIẾU GIỌNG VIỆT';$('mcSpeaking').classList.add('voice-warning');}else if(info.speaking){$('mcSpeaking').textContent='● ĐANG BÌNH LUẬN TIẾNG VIỆT';$('mcSpeaking').classList.remove('voice-warning');}
+ },
+ onVoiceStatus(status){
+  $('mcSpeaking').classList.toggle('voice-warning',status.mode==='unavailable');
+  $('mcSpeaking').textContent=status.mode==='unavailable'?'● CHƯA CÓ GIỌNG VIỆT · CHỈ HIỆN CHỮ':status.mode==='cloud'?'● GIỌNG NAM MINH · TIẾNG VIỆT':status.mode==='vietnamese'?'● GIỌNG TIẾNG VIỆT':'● CHỜ GIỌNG TIẾNG VIỆT';
+  if(status.warning)$('mcSpeaking').title=status.warning;
+  if(parent!==window)parent.postMessage({type:'arena.voice-status',...status},location.origin);
  },
  onReady(ready){$('soundUnlock').hidden=ready||muted;}
 });
@@ -61,6 +67,7 @@ function renderFighter(side,f){
  $(side+'Energy').style.transform=`scaleX(${f?ratio(f.energy,100):0})`;
  $(side+'EnergyText').textContent=`${number(f?.energy)}%`;
  $(side+'Corner').classList.toggle('low-health',!!f&&hp<.25);
+ const buffs=[];if(f?.buffRemainingMs>0)buffs.push(`TĂNG LỰC +${Math.round(((f.powerMultiplier||1.3)-1)*100)}% · ${Math.ceil(f.buffRemainingMs/1000)}s`);if(f?.guardRemainingMs>0)buffs.push(`HỘ THỂ · ${Math.ceil(f.guardRemainingMs/1000)}s`);$(side+'Buff').textContent=buffs.join(' / ');$(side+'Buff').classList.toggle('active',buffs.length>0);
 }
 function listRow(index,name,avatar,value){
  const li=document.createElement('li'),rank=document.createElement('span'),av=document.createElement('span'),nm=document.createElement('span'),val=document.createElement('span');
@@ -78,37 +85,33 @@ function showCenter(phase,state){
  if(phase==='countdown') {box.classList.add('countdown');$('centerEyebrow').textContent='VÀO VỊ TRÍ';$('centerTitle').textContent=String(Math.max(1,Math.ceil((state.match.countdownMs||0)/1000)));$('centerNote').textContent='Chuẩn bị tung đòn đầu tiên.';return;}
  if(phase==='finished'){
   box.classList.add('finished');const r=state.match.result;
-  $('centerEyebrow').textContent=r?.winner?'NGƯỜI THẮNG GIỮ ĐÀI':'TRẬN ĐẤU KẾT THÚC';
-  $('centerTitle').textContent=r?.winner?'WINNER':'HÒA';
+  $('centerEyebrow').textContent='NGƯỜI THẮNG GIỮ ĐÀI';
+  $('centerTitle').textContent='CHIẾN THẮNG';
   $('centerNote').textContent=r?.name||state.match.fighters?.[r?.winner]?.name||r?.reason||'Một trận đấu đầy nỗ lực.';return;
  }
+ if(phase==='rest'){box.classList.add('rest');$('centerEyebrow').textContent=`CHUẨN BỊ HIỆP ${(state.match.round||1)+1}`;$('centerTitle').textContent='LẤY LẠI SỨC';$('centerNote').textContent='Đổi chiến thuật. Cổ vũ góc của bạn trước tiếng chuông tiếp theo!';return;}
  if(phase==='paused'){box.classList.add('paused');$('centerEyebrow').textContent='NGHỈ GIỮA HIỆP';$('centerTitle').textContent='TẠM DỪNG';$('centerNote').textContent='Giữ sức. Trận đấu sẽ tiếp tục ngay.';return;}
  $('centerEyebrow').textContent='SÂN KHẤU CỦA BẠN';$('centerTitle').replaceChildren();
  $('centerTitle').append('AI SẼ',document.createElement('br'),'LÀ NHÀ VÔ ĐỊCH?');
  const entry=state.settings?.entryCoins??1;
  $('centerNote').textContent=entry>0?`Tặng từ ${number(entry)} xu để đăng ký lên đài.`:'Bình luận “lên đài” để đăng ký thách đấu.';
 }
-let giftPage=0,showGift=false,lastGuideSignature='';
-const actionLabels={entry:'Vé lên đài',jab:'Đấm thẳng',hook:'Đấm móc',uppercut:'Đấm bốc',kick:'Đá vòng',flurry:'Liên hoàn đấm',ultimate:'Tuyệt kỹ bão quyền',heal:'Hồi máu',shield:'Lá chắn'};
-const actionIcons={entry:'↗',jab:'✦',hook:'ϟ',uppercut:'↑',kick:'↗',flurry:'×5',ultimate:'✺',heal:'+',shield:'◇'};
+let supportPage=0,lastGuideSignature='';
+const actionLabels={entry:'Lên đài',jab:'Đấm thẳng',hook:'Đấm móc',uppercut:'Đấm bốc',kick:'Đá vòng',flurry:'Liên hoàn đấm',ultimate:'Tuyệt kỹ bão quyền',heal:'Hồi máu',boost:'Tăng sát thương',shield:'Lá chắn'};
+const actionIcons={jab:'✦',hook:'ϟ',uppercut:'↑',kick:'↗',flurry:'×5',ultimate:'✺',heal:'+',boost:'↑',shield:'◇'};
 function renderGiftGuide(){
  if(!current)return;
- const menu=Array.isArray(current.giftMenu)?current.giftMenu:Object.entries(current.settings?.giftMap||{}).map(([id,action])=>({id,name:`Quà #${id}`,action,label:actionLabels[action]||action}));
- const commandOn=current.settings?.showCommands!==false,displayGifts=menu.length&&(!commandOn||showGift);
- $('commandGuide').style.visibility=commandOn||menu.length?'visible':'hidden';
- $('commandGrid').hidden=!!displayGifts;$('giftGuide').hidden=!displayGifts;
- $('guideTitle').textContent=displayGifts?'TẶNG QUÀ. TIẾP SỨC. BÙNG NỔ.':'BÀN PHÍM CỦA BẠN LÀ VŨ KHÍ';
- $('guideNote').textContent=displayGifts?'CHỌN ĐỎ / XANH ĐỂ CỔ VŨ':'BÌNH LUẬN ĐỂ RA ĐÒN';
- if(!displayGifts)return;
- const items=menu.slice((giftPage%Math.ceil(menu.length/4))*4,(giftPage%Math.ceil(menu.length/4))*4+4),signature=JSON.stringify(items);
+ const rules=Array.isArray(current.settings?.cornerGifts)?current.settings.cornerGifts:[];
+ const signature=JSON.stringify([rules,supportPage]);
+ $('commandGuide').style.visibility=current.settings?.showCommands===false?'hidden':'visible';
  if(signature===lastGuideSignature)return;lastGuideSignature=signature;
- $('giftGuide').replaceChildren();
- for(const item of items){
-  const chip=document.createElement('div'),icon=document.createElement('span'),body=document.createElement('div'),name=document.createElement('strong'),action=document.createElement('small'),price=document.createElement('em');
-  chip.className='gift-guide-chip';icon.className='gift-guide-icon';icon.textContent=actionIcons[item.action]||'✦';name.textContent=item.name||`Quà #${item.id}`;action.textContent=item.label||actionLabels[item.action]||'Tiếp sức';price.textContent=item.coins?`${number(item.coins)} XU`:'QUÀ TẶNG';body.append(name,action);chip.append(icon,body,price);$('giftGuide').appendChild(chip);
+ for(const side of ['red','blue']){
+  const root=$(side+'Support'),all=rules.filter(r=>r.side===side),pages=Math.max(1,Math.ceil(all.length/4)),items=all.slice((supportPage%pages)*4,(supportPage%pages)*4+4);root.replaceChildren();
+  if(!items.length){const empty=document.createElement('p');empty.className='support-empty';empty.textContent='Chưa cấu hình mức xu cho góc này';root.appendChild(empty);continue;}
+  for(const rule of items){const row=document.createElement('div'),price=document.createElement('strong'),label=document.createElement('span');row.className='support-action';price.append(document.createTextNode(number(rule.coins)));const unit=document.createElement('small');unit.textContent=' XU';price.appendChild(unit);label.textContent=actionLabels[rule.action]||'Tiếp sức';row.append(price,label);root.appendChild(row);}
  }
 }
-setInterval(()=>{showGift=!showGift;if(showGift)giftPage++;renderGiftGuide();},10000);
+setInterval(()=>{supportPage++;renderGiftGuide();},6500);
 function render(state){
  if(!state||!state.match)return;current=state;clockOffset=(state.now||Date.now())-Date.now();
  const phase=state.match.phase||'waiting',id=state.match.id||'';
@@ -120,17 +123,18 @@ function render(state){
  else{$('arenaTitle').textContent=String(title).slice(0,40);$('arenaTitle').style.fontSize=`${Math.max(34,Math.min(107,1450/title.length))}px`;}
  $('modeBadge').className=`mode-badge ${state.mode==='demo'?'demo':'live'}`;
  $('modeBadge').textContent=showcase?'BẢN XEM GIAO DIỆN':state.mode==='demo'?'CHẠY THỬ · DEMO':state.connection?.status==='connected'?'● TIKTOK LIVE':'SẴN SÀNG LIVE';
- $('matchLabel').textContent=`TRẬN ${String(state.match.number||1).padStart(3,'0')}`;
- $('phaseLabel').textContent={waiting:'CHỜ VÕ SĨ',countdown:'CHUẨN BỊ',fighting:'ĐANG THI ĐẤU',paused:'TẠM DỪNG',finished:'KẾT THÚC'}[phase]||phase;
- $('matchStatus').textContent={waiting:'VÕ ĐÀI ĐANG MỞ',countdown:'SẴN SÀNG GIAO ĐẤU',fighting:'ROUND IN PROGRESS',paused:'TẠM NGHỈ',finished:'CHIẾN THẮNG THUỘC VỀ BẠN'}[phase]||'';
+ $('matchLabel').textContent=`TRẬN ${state.match.number||1} · HIỆP ${state.match.round||1}`;
+ $('phaseLabel').textContent={waiting:'CHỜ VÕ SĨ',countdown:'CHUẨN BỊ',fighting:'ĐANG THI ĐẤU',rest:'NGHỈ GIỮA HIỆP',paused:'TẠM DỪNG',finished:'KẾT THÚC'}[phase]||phase;
+ $('matchStatus').textContent={waiting:'VÕ ĐÀI ĐANG MỞ',countdown:'SẴN SÀNG GIAO ĐẤU',fighting:'SO GĂNG ĐẾN KHI PHÂN THẮNG BẠI',rest:'NGHỈ GIỮA HIỆP',paused:'TẠM NGHỈ',finished:'CHIẾN THẮNG THUỘC VỀ BẠN'}[phase]||'';
  renderFighter('red',state.match.fighters?.red);renderFighter('blue',state.match.fighters?.blue);
  renderList('queueList',state.queue||[],'Vị trí tiếp theo dành cho bạn.',x=>`${number(x.coins)} XU`);
  $('queueCount').textContent=String(state.queue?.length||0).padStart(2,'0');
- renderList('rankingList',state.leaderboard||[],'Tên bạn sẽ xuất hiện ở đây.',x=>`${number(x.wins)} W`);
+ renderList('rankingList',state.leaderboard||[],'Tên bạn sẽ xuất hiện ở đây.',x=>`${number(x.wins)} THẮNG`);
  $('entryHint').textContent=(state.settings?.entryCoins??1)>0?`TỪ ${number(state.settings?.entryCoins)} XU · ĐĂNG KÝ LÊN ĐÀI ↗`:'BÌNH LUẬN “LÊN ĐÀI” · THAM GIA MIỄN PHÍ ↗';
  $('sceneStats').textContent=`${number(state.stats?.punches)} CÚ ĐẤM · ${number(state.stats?.matches)} TRẬN`;
+ $('pressureBanner').hidden=!state.match.overtime;$('pressureBanner').textContent=state.match.overtime?`ÁP LỰC ×${Number(state.match.pressure||1).toFixed(1)} · ${state.match.healMultiplier===0?'KHÓA HỒI MÁU':'HỒI MÁU GIẢM'}`:'';
  renderGiftGuide();
- fighters.update(state);showCenter(phase,state);sound.settings(state.settings||{});
+ fighters.update(state);freezeEffects(['paused','rest'].includes(phase));showCenter(phase,state);sound.settings(state.settings||{});
  if(state.music)sound.event({type:'music',...state.music});
  if(state.audio?.caption&&Date.now()-localCaptionAt>6000)$('mcCaption').textContent=state.audio.caption;
  updateClock();
@@ -138,19 +142,21 @@ function render(state){
 function updateClock(){
  if(!current?.match)return;
  const m=current.match;let remaining=m.phase==='waiting'?(Number(current.settings?.roundSeconds)||120)*1000:(m.remainingMs||0);
- if(m.phase==='fighting'&&connected)remaining=Math.max(0,remaining-(Date.now()+clockOffset-current.now));
+ if(['fighting','rest'].includes(m.phase)&&connected)remaining=Math.max(0,remaining-(Date.now()+clockOffset-current.now));
  const seconds=Math.ceil(remaining/1000);$('matchClock').textContent=`${String(Math.floor(seconds/60)).padStart(2,'0')}:${String(seconds%60).padStart(2,'0')}`;
  document.querySelector('.round-clock').classList.toggle('hot',seconds<=15&&m.phase==='fighting');
  if(m.phase==='countdown'){
-  const left=Math.max(0,(m.countdownMs||0)-(Date.now()+clockOffset-current.now));$('centerTitle').textContent=left>0?String(Math.ceil(left/1000)):'FIGHT!';
+  const left=Math.max(0,(m.countdownMs||0)-(Date.now()+clockOffset-current.now));$('centerTitle').textContent=left>0?String(Math.ceil(left/1000)):'GIAO ĐẤU!';
  }
 }
 setInterval(updateClock,100);
-function later(fn,ms){const id=setTimeout(()=>{timerHandles.delete(id);fn();},ms);timerHandles.add(id);}
+function later(fn,ms){const task={fn,remaining:Math.max(0,ms),due:0,id:null};timerHandles.add(task);if(!effectsPaused)scheduleEffect(task);}
+function scheduleEffect(task){task.due=performance.now()+task.remaining;task.id=setTimeout(()=>{timerHandles.delete(task);task.fn();},task.remaining);}
+function freezeEffects(paused){if(paused===effectsPaused)return;effectsPaused=paused;if(paused){for(const task of timerHandles){task.remaining=Math.max(0,task.due-performance.now());clearTimeout(task.id);task.id=null;}for(const animation of scene.getAnimations({subtree:true})){if(animation.playState==='running'){animation.pause();frozenAnimations.add(animation);}}}else{for(const task of timerHandles)if(task.id===null)scheduleEffect(task);for(const animation of frozenAnimations)if(animation.playState==='paused')animation.play();frozenAnimations.clear();}}
 function addFx(el,life){
  while(fx.childElementCount>=110)fx.firstElementChild.remove();fx.appendChild(el);later(()=>el.remove(),life);return el;
 }
-function clearFx(){for(const t of timerHandles)clearTimeout(t);timerHandles.clear();fx.replaceChildren();scene.getAnimations().forEach(a=>a.cancel());$('impactFlash').getAnimations().forEach(a=>a.cancel());}
+function clearFx(){scene.classList.remove('cinematic','cinema-red','cinema-blue');for(const t of timerHandles)clearTimeout(t.id);timerHandles.clear();frozenAnimations.clear();fx.replaceChildren();scene.getAnimations().forEach(a=>a.cancel());$('impactFlash').getAnimations().forEach(a=>a.cancel());}
 function element(cls,x,y){const el=document.createElement('div');el.className=cls;if(x!=null)el.style.left=`${x}%`;if(y!=null)el.style.top=`${y}%`;return el;}
 function impact(e,index=0){
  const target=e.target||((e.side==='red')?'blue':'red'),x=target==='blue'?65:35,y=e.move==='kick'?55:40;
@@ -169,21 +175,34 @@ function impact(e,index=0){
  if(index===0){
   const n=element('damage-number',x+(e.side==='red'?4:-4),y-4);n.style.setProperty('--fx-color',color);
   const label=e.dodged?'NÉ!':e.blocked?'ĐỠ!':`−${number(e.damage)}`;n.textContent=label;
-  if(e.critical||e.gift){const s=document.createElement('small');s.textContent=e.critical?'CRITICAL HIT':'GIFT POWER';n.appendChild(s);}addFx(n,1000);
+  if(e.critical||e.gift){const s=document.createElement('small');s.textContent=e.critical?'ĐÒN CHÍ MẠNG':'SỨC MẠNH CỔ VŨ';n.appendChild(s);}addFx(n,1000);
  }
+}
+function startCinematic(e){
+ const duration=Math.max(600,Math.min(5000,Number(e.durationMs)||2400)),ultimate=e.move==='ultimate';
+ scene.classList.add('cinematic',e.side==='blue'?'cinema-blue':'cinema-red');
+ const label=element('special-intro '+(e.side==='blue'?'blue':'')),small=document.createElement('small'),title=document.createElement('strong');small.textContent=`GÓC ${e.side==='blue'?'XANH':'ĐỎ'} TUNG CHIÊU`;title.textContent=ultimate?'BÃO QUYỀN':'LIÊN HOÀN QUYỀN';label.append(small,title);addFx(label,Math.min(duration,1800));
+ const burst=element('charge-aura',e.side==='blue'?66:34,52);burst.style.setProperty('--charge-color',e.side==='blue'?'#55e5ff':'#ff9a52');burst.style.setProperty('--charge-duration',`${duration}ms`);addFx(burst,duration);
+ if(!reduced.matches){
+  const windup=duration*(ultimate?.3:.17),count=ultimate?7:5,spacing=(duration-windup-300)/count;
+  for(let i=0;i<count;i++)later(()=>{if(current?.match.phase!=='fighting')return;impact({...e,critical:ultimate&&i===count-1,gift:true,damage:0},1);},windup+i*spacing+120);
+ }
+ later(()=>{scene.classList.remove('cinematic','cinema-red','cinema-blue');},duration+120);
 }
 function onEvent(e){
  if(!e?.type)return;
- if(e.type==='hit'){
+ if(e.type==='attack.start'){startCinematic(e);fighters.attack(e);}
+ else if(e.type==='hit'){
   fighters.hit(e);
-  if(!e.dodged){const hits=Math.max(1,Math.min(6,Number(e.hits)||1));for(let i=0;i<hits;i++)later(()=>impact(e,i),180+i*150);}
+  if(!e.dodged){const hits=e.choreographed?1:Math.max(1,Math.min(6,Number(e.hits)||1));for(let i=0;i<hits;i++)later(()=>impact(e,i),e.choreographed?0:180+i*150);}
   else impact({...e,damage:0},0);
   if((e.combo||e.hits||0)>1){
-   fx.querySelectorAll('.combo-callout').forEach(x=>x.remove());const c=element(`combo-callout ${e.side==='blue'?'blue':''}`);c.append('COMBO');const b=document.createElement('b');b.textContent=`×${Math.min(99,e.combo||e.hits)}`;const small=document.createElement('small');small.textContent=e.move==='ultimate'?'TUYỆT CHIÊU BÙNG NỔ':'KHÔNG THỂ CẢN PHÁ';c.append(b,small);addFx(c,850);
+   fx.querySelectorAll('.combo-callout').forEach(x=>x.remove());const c=element(`combo-callout ${e.side==='blue'?'blue':''}`);c.append('LIÊN HOÀN');const b=document.createElement('b');b.textContent=`×${Math.min(99,e.combo||e.hits)}`;const small=document.createElement('small');small.textContent=e.move==='ultimate'?'TUYỆT CHIÊU BÙNG NỔ':'KHÔNG THỂ CẢN PHÁ';c.append(b,small);addFx(c,850);
   }
  }else if(e.type==='defend')fighters.defend(e);
+ else if(e.type==='heal'||e.type==='boost'){const c=element('support-effect '+(e.side==='blue'?'blue':''),e.side==='blue'?66:34,43);c.textContent=e.type==='heal'?`+${number(e.amount||e.healed)} HP`:'TĂNG SÁT THƯƠNG';addFx(c,1800);}
  else if(e.type==='ko'){
-  fighters.ko(e);fx.querySelectorAll('.ko-stamp').forEach(x=>x.remove());const stamp=element('ko-stamp');stamp.textContent=!e.winner?'DRAW':e.reason==='ko'?'K.O.':'WIN';const small=document.createElement('small');small.textContent=e.winner?'THE CHAMPION STAYS':'NGANG TÀI NGANG SỨC';stamp.appendChild(small);addFx(stamp,2700);
+  fighters.ko(e);fx.querySelectorAll('.ko-stamp').forEach(x=>x.remove());const stamp=element('ko-stamp');stamp.textContent=e.reason==='ko'?'HẠ GỤC':'THẮNG';const small=document.createElement('small');small.textContent='NHÀ VÔ ĐỊCH TIẾP TỤC GIỮ ĐÀI';stamp.appendChild(small);addFx(stamp,2700);
   if(!reduced.matches)for(let i=0;i<40;i++)later(()=>{const p=element('particle',Math.random()*100,15);p.style.setProperty('--tx',`${(Math.random()-.5)*200}px`);p.style.setProperty('--ty',`${300+Math.random()*350}px`);p.style.setProperty('--size',`${4+Math.random()*5}px`);p.style.setProperty('--fx-color',i%2?'#d6f08b':'#f5f2e9');p.style.setProperty('--duration','1800ms');addFx(p,1900);},i*18);
  }else if(e.type==='gift'){
   fx.querySelectorAll('.gift-callout').forEach(x=>x.remove());const g=element('gift-callout'),symbol=document.createElement('span'),wrap=document.createElement('div'),name=document.createElement('strong'),note=document.createElement('small');symbol.className='gift-symbol';symbol.textContent='✦';name.textContent=e.name||'Khán giả';note.textContent=`${number(e.coins)} XU${e.side?` · TIẾP SỨC GÓC ${e.side==='red'?'ĐỎ':'XANH'}`:' · HẸN BẠN TRÊN VÕ ĐÀI'}`;wrap.append(name,note);g.append(symbol,wrap);addFx(g,3300);
@@ -198,8 +217,8 @@ function updateNetwork(){
 }
 if(!showcase)connect({role:'overlay',onState:s=>{render(s);updateNetwork();},onEvent,onStatus:ok=>{connected=ok;updateNetwork();}});
 else{
- const f=(uid,name,hp,energy)=>({uid,name,hp,maxHp:1000,stamina:82,maxStamina:100,energy,damage:0,combo:0,wins:4,streak:3});
- render({mode:'demo',now:Date.now(),match:{id:'showcase',number:12,phase:'fighting',remainingMs:87000,countdownMs:0,fighters:{red:f('show-red','HẢI PHÒNG',740,72),blue:f('show-blue','SÀI GÒN',580,91)},result:null},queue:[{name:'Minh Anh',coins:5},{name:'Hoàng Long',coins:10},{name:'Ngọc Hân',coins:3}],leaderboard:[{name:'Hải Phòng',wins:8},{name:'Sài Gòn',wins:6},{name:'Đà Nẵng',wins:4}],settings:{title:'VÕ ĐÀI LIVE',entryCoins:1,showCommands:true,mcEnabled:false,musicEnabled:false,sfxVolume:0},stats:{punches:248,matches:12}});connected=true;updateNetwork();
+ const f=(uid,name,hp,energy)=>({uid,name,hp,maxHp:1600,stamina:82,maxStamina:100,energy,damage:0,combo:0,wins:4,streak:3});
+ render({mode:'demo',now:Date.now(),match:{id:'showcase',number:12,round:2,phase:'fighting',pressure:1.2,remainingMs:87000,countdownMs:0,fighters:{red:f('show-red','HẢI PHÒNG',1240,72),blue:f('show-blue','SÀI GÒN',1080,91)},result:null},queue:[{name:'Minh Anh',coins:5},{name:'Hoàng Long',coins:10},{name:'Ngọc Hân',coins:3}],leaderboard:[{name:'Hải Phòng',wins:8},{name:'Sài Gòn',wins:6},{name:'Đà Nẵng',wins:4}],settings:{title:'VÕ ĐÀI LIVE',cornerGifts:[{coins:5,side:'red',action:'flurry'},{coins:6,side:'blue',action:'flurry'},{coins:30,side:'red',action:'ultimate'},{coins:50,side:'blue',action:'ultimate'},{coins:10,side:'red',action:'heal'},{coins:20,side:'blue',action:'heal'},{coins:99,side:'red',action:'boost'},{coins:100,side:'blue',action:'boost'}],entryCoins:1,showCommands:true,mcEnabled:false,musicEnabled:false,sfxVolume:0},stats:{punches:248,matches:12}});connected=true;updateNetwork();
  globalThis.arenaShowcase={event:onEvent,render};
  $('mcCaption').textContent='BẢN XEM GIAO DIỆN · Hình minh họa, không có giao dịch hay trận LIVE thật.';
 }

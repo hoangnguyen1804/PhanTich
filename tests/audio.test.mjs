@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { setImmediate as nextTurn } from 'node:timers/promises';
-import { createAudio, cleanMusicName } from '../src/audio.mjs';
+import { createAudio, cleanMusicName, resolveSpeechProxy } from '../src/audio.mjs';
 
 function fixture(t, settings = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'vo-dai-audio-'));
@@ -42,7 +42,7 @@ test('disabled automatic MC remains silent, while an explicit operator voice tes
   assert.equal(events.find(event => event.type === 'tts')?.text, 'Thử giọng theo yêu cầu');
 });
 
-test('KO commentary names the actual winner and interrupts lower priority play-by-play', async t => {
+test('KO commentary names the winning corner in Vietnamese and interrupts lower priority play-by-play', async t => {
   const { audio, events } = fixture(t);
   const state = { match: { id: 'round-1', phase: 'fighting', fighters: { red: { name: 'Hỏa Quyền', hp: 500, maxHp: 1000 }, blue: { name: 'Bão Xanh', hp: 100, maxHp: 1000 } } } };
   audio.announce({ type: 'hit', attacker: 'Hỏa Quyền', defender: 'Bão Xanh', target: 'blue', damage: 40, move: 'hook' }, state);
@@ -51,7 +51,10 @@ test('KO commentary names the actual winner and interrupts lower priority play-b
   await nextTurn();
   assert.ok(events.some(event => event.type === 'ttsStop'));
   const speech = events.filter(event => event.type === 'tts').at(-1);
-  assert.match(speech.text, /Hỏa Quyền chiến thắng/);
+  assert.match(speech.text, /Góc đỏ chiến thắng/);
+  assert.doesNotMatch(speech.text, /Hỏa Quyền|KO|winner|combo/i);
+  assert.equal(speech.language, 'vi-VN');
+  assert.equal(speech.vietnameseOnly, true);
   assert.equal(speech.tag, 'ko');
 });
 
@@ -104,4 +107,72 @@ test('reset cancels old fight narration and closed audio never emits or accepts 
   assert.throws(() => audio.saveMusic('after-close.mp3', mp3(1)));
   await nextTurn();
   assert.equal(events.length, count);
+});
+
+
+test('automatic gift commentary uses the routed corner and never reads English user handles', async t => {
+  const { audio, events } = fixture(t);
+  audio.announce({ type: 'gift', name: 'TheBigBossEnglishOnly', side: 'blue', coins: 6, move: 'flurry' }, { match: { phase: 'fighting' } });
+  await nextTurn();
+  const speech = events.find(e => e.type === 'tts');
+  assert.match(speech.text, /góc xanh.*liên hoàn/);
+  assert.doesNotMatch(speech.text, /TheBigBossEnglishOnly|combo|blue|flurry/);
+  assert.equal(speech.voice, 'vi-VN-NamMinhNeural');
+});
+
+test('round rest commentary never announces a draw or ends the match', async t => {
+  const { audio, events } = fixture(t);
+  audio.announce({ type: 'match', phase: 'rest' }, { match: { id: 'rest', phase: 'rest', round: 2 } });
+  await nextTurn();
+  const text = events.find(e => e.type === 'tts').text;
+  assert.match(text, /Hết hiệp.*chưa kết thúc/);
+  assert.doesNotMatch(text, /hòa|draw/i);
+});
+
+test('a cinematic ultimate start announces the windup in Vietnamese before its impact', async t => {
+  const { audio, events } = fixture(t);
+  audio.announce({ type: 'attack.start', side: 'red', target: 'blue', move: 'ultimate', durationMs: 2400 }, { match: { phase: 'fighting' } });
+  await nextTurn();
+  const text = events.find(e => e.type === 'tts').text;
+  assert.match(text, /Góc đỏ.*Tuyệt kỹ bão quyền.*Góc xanh/);
+  assert.doesNotMatch(text, /ultimate|red|blue/i);
+});
+
+test('power and comeback calls explain tactics in Vietnamese without donor names', async t => {
+  const first = fixture(t);
+  first.audio.announce({ type: 'boost', side: 'red', name: 'ForeignName' }, { match: { phase: 'fighting' } });
+  await nextTurn();
+  assert.match(first.events.find(e => e.type === 'tts').text, /Góc đỏ.*sức mạnh/);
+  const second = fixture(t);
+  second.audio.announce({ type: 'comeback', side: 'blue', name: 'AnotherForeignName' }, { match: { phase: 'fighting' } });
+  await nextTurn();
+  const speech = second.events.find(e => e.type === 'tts');
+  assert.match(speech.text, /Góc xanh.*lật kèo/);
+  assert.doesNotMatch(speech.text, /ForeignName/);
+});
+
+test('voice diagnostics describe the fixed Vietnamese voice and offline fallback honestly', t => {
+  const { audio } = fixture(t);
+  const status = audio.status();
+  assert.equal(status.language, 'vi-VN');
+  assert.equal(status.vietnameseOnly, true);
+  assert.equal(status.voice, 'vi-VN-NamMinhNeural');
+  assert.equal(status.provider, 'microsoft-edge');
+  assert.match(status.error, /giọng Việt/);
+  assert.equal(status.fallback, true);
+});
+
+
+test('Microsoft speech proxy follows inherited HTTPS settings and honors NO_PROXY host and port rules', () => {
+  const proxy = 'http://proxy.example.test:8080';
+  assert.equal(resolveSpeechProxy({ HTTPS_PROXY: proxy }), proxy);
+  assert.equal(resolveSpeechProxy({ https_proxy: proxy, HTTPS_PROXY: 'http://other.test' }), proxy);
+  assert.equal(resolveSpeechProxy({ HTTP_PROXY: proxy }), proxy);
+  for (const bypass of ['*', 'speech.platform.bing.com', '.bing.com', '*.bing.com', 'bing.com', 'speech.platform.bing.com:443', 'elsewhere.test, .platform.bing.com']) {
+    assert.equal(resolveSpeechProxy({ HTTPS_PROXY: proxy, NO_PROXY: bypass }), '', bypass);
+  }
+  assert.equal(resolveSpeechProxy({ HTTPS_PROXY: proxy, NO_PROXY: 'speech.platform.bing.com:80,notbing.com' }), proxy);
+  assert.equal(resolveSpeechProxy({ HTTPS_PROXY: proxy, NO_PROXY: 'evilbing.com' }), proxy);
+  assert.equal(resolveSpeechProxy({}), '');
+  assert.throws(() => resolveSpeechProxy({ HTTPS_PROXY: 'socks5://bad.test' }), /proxy HTTPS/);
 });

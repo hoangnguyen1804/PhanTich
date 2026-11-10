@@ -11,7 +11,30 @@ const cleanText = (value, max = 320) => String(value ?? '').normalize('NFKC').re
 const number = (value, fallback, low, high) => Number.isFinite(Number(value)) ? Math.max(low, Math.min(high, Number(value))) : fallback;
 const escapeXml = text => text.replace(/[<>&"']/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&apos;' }[c]));
 const sample = list => list[Math.floor(Math.random() * list.length)];
-const moveNames = { jab: 'đấm thẳng', hook: 'đấm móc', uppercut: 'móc ngược', kick: 'đá vòng', flurry: 'liên hoàn đấm', ultimate: 'tuyệt kỹ' };
+const moveNames = { jab: 'đấm thẳng', hook: 'đấm móc', uppercut: 'móc ngược', kick: 'đá vòng', flurry: 'liên hoàn đấm', ultimate: 'tuyệt kỹ bão quyền', heal: 'hồi máu', boost: 'tăng sức mạnh', shield: 'lá chắn phòng thủ' };
+const cornerName = side => side === 'red' ? 'Góc đỏ' : side === 'blue' ? 'Góc xanh' : 'Võ sĩ';
+
+// Follow inherited HTTP proxy settings without exposing proxy credentials in logs.
+// NO_PROXY is evaluated only for the fixed Microsoft destination, never user input.
+export function resolveSpeechProxy(env = process.env) {
+  const hostname = 'speech.platform.bing.com', port = '443';
+  const bypass = String(env.no_proxy || env.NO_PROXY || '').split(/[\s,]+/).filter(Boolean).some(raw => {
+    const entry = raw.trim().toLowerCase();
+    if (entry === '*') return true;
+    const match = /^(.*?)(?::(\d+))?$/.exec(entry);
+    if (!match || (match[2] && match[2] !== port)) return false;
+    let host = match[1];
+    if (host.startsWith('*.')) host = host.slice(1);
+    if (host.startsWith('.')) return hostname === host.slice(1) || hostname.endsWith(host);
+    return hostname === host || hostname.endsWith('.' + host);
+  });
+  if (bypass) return '';
+  const proxy = String(env.https_proxy || env.HTTPS_PROXY || env.http_proxy || env.HTTP_PROXY || '').trim();
+  if (!proxy) return '';
+  try { const url = new URL(proxy); if (!['http:', 'https:'].includes(url.protocol)) throw new Error(); }
+  catch { throw new Error('Cấu hình proxy HTTPS chưa hợp lệ; dùng proxy HTTP hoặc HTTPS để kết nối giọng tiếng Việt.'); }
+  return proxy;
+}
 
 export function cleanMusicName(raw) {
   const input = String(raw ?? '').normalize('NFC');
@@ -37,7 +60,7 @@ export function createAudio({ dataDir, musicDir, onEvent = () => {}, getSettings
   fs.mkdirSync(musicDir, { recursive: true });
   let closed = false, busy = false, queue = [], current = null, currentTts = null;
   let nextSequence = 0, cancelPlayback = null, cancelSynthesis = null, latestError = '', lastHitAt = 0, lastQueueAt = 0, lastInviteAt = 0, lastDefenseAt = 0, musicFiles = [], musicSignature = '';
-  let lastMatchKey = '', synthUnavailableUntil = 0, synthesized = 0;
+  let lastMatchKey = '', synthUnavailableUntil = 0, synthesized = 0, lastBigAt = 0, lastSpecialAt = 0, lastSynthesisAt = 0;
   const settings = () => {
     const s = getSettings() || {};
     return { enabled: s.mcEnabled !== false, volume: number(s.mcVolume, 80, 0, 100), rate: number(s.mcRate, 15, -40, 60), idle: number(s.mcIdleSeconds, 35, 15, 300), musicEnabled: !!s.musicEnabled, musicVolume: number(s.musicVolume, 25, 0, 100) };
@@ -118,12 +141,20 @@ export function createAudio({ dataDir, musicDir, onEvent = () => {}, getSettings
       if (stat.isFile() && stat.size >= 1024 && stat.size <= MAX_SYNTH_BYTES) return { url: '/audio/' + file, bytes: stat.size, cached: true };
     } catch { /* cache miss */ }
     if (offline || Date.now() < synthUnavailableUntil || closed) return { url: '', bytes: 0, fallback: true };
-    let timer, voice, expired = false;
+    lastSynthesisAt = Date.now();
+    let timer, voice, proxyAgent, expired = false;
     try {
       const job = (async () => {
         const { MsEdgeTTS, OUTPUT_FORMAT } = await import('msedge-tts');
         if (closed) throw new Error('Kênh âm thanh đã đóng.');
-        voice = new MsEdgeTTS({ connectionTimeoutMs: 3000, synthesisTimeoutMs: 4000 });
+        const proxyUrl = resolveSpeechProxy();
+        if (proxyUrl) {
+          const module = await import('https-proxy-agent');
+          const Agent = module.HttpsProxyAgent || module.default?.HttpsProxyAgent || module.default;
+          proxyAgent = new Agent(proxyUrl);
+        }
+        if (closed || expired) throw new Error('Đã bỏ câu đọc cũ.');
+        voice = new MsEdgeTTS({ connectionTimeoutMs: 3000, synthesisTimeoutMs: 4000, agent: proxyAgent });
         currentTts = voice;
         await voice.setMetadata(VOICE, OUTPUT_FORMAT.AUDIO_24KHZ_96KBITRATE_MONO_MP3);
         if (closed) throw new Error('Kênh âm thanh đã đóng.');
@@ -156,14 +187,16 @@ export function createAudio({ dataDir, musicDir, onEvent = () => {}, getSettings
       })]);
     } catch (error) {
       if (error?.cancelled) return { url: '', bytes: 0, fallback: true };
-      latestError = cleanText(error?.message || 'Dịch vụ giọng đọc chưa sẵn sàng.', 120);
+      latestError = 'Chưa kết nối được giọng Nam Minh tiếng Việt. Chỉ dùng giọng dự phòng nếu máy có giọng Việt; nếu không MC sẽ hiện chữ.';
       synthUnavailableUntil = Date.now() + 30_000;
-      logger('MC dùng giọng trình duyệt/chữ trong 30 giây vì giọng Microsoft chưa sẵn sàng.');
+      logger(latestError);
+      emit({ type: 'voice.status', provider: 'microsoft-edge', language: 'vi-VN', vietnameseOnly: true, fallback: true, warning: latestError });
       return { url: '', bytes: 0, fallback: true };
     } finally {
       clearTimeout(timer);
       cancelSynthesis = null;
       try { voice?.close(); } catch {}
+      try { proxyAgent?.destroy(); } catch {}
       if (currentTts === voice) currentTts = null;
     }
   }
@@ -192,7 +225,7 @@ export function createAudio({ dataDir, musicDir, onEvent = () => {}, getSettings
     const item = { text, priority, tag, manual, at: now, id: ++nextSequence, cancelled: false };
     const position = queue.findIndex(other => other.priority < priority);
     if (position < 0) queue.push(item); else queue.splice(position, 0, item);
-    if (priority >= 90 && current && current.priority < priority) interrupt();
+    if (priority >= 80 && current && current.priority < priority) interrupt();
     void pump();
     return { queued: true, text, id: item.id };
   }
@@ -206,11 +239,11 @@ export function createAudio({ dataDir, musicDir, onEvent = () => {}, getSettings
         if (Date.now() - item.at > (item.priority >= 80 ? 30_000 : 10_000)) continue;
         current = item;
         const s = settings();
+        emit({ type: 'announcement', text: item.text, priority: item.priority, tag: item.tag, language: 'vi-VN' });
         const result = await synthesize(item.text, s.rate);
         if (closed || item.cancelled) continue;
         const durationMs = Math.round(Math.max(1500, Math.min(15000, result.bytes ? result.bytes / 12 : item.text.length / (14 * (1 + s.rate / 100)) * 1000)));
-        emit({ type: 'announcement', text: item.text, priority: item.priority, tag: item.tag });
-        emit({ type: 'tts', url: result.url, text: item.text, priority: item.priority, tag: item.tag, volume: s.volume, rate: s.rate, durationMs, fallback: !!result.fallback });
+        emit({ type: 'tts', url: result.url, text: item.text, priority: item.priority, tag: item.tag, volume: s.volume, rate: s.rate, durationMs, fallback: !!result.fallback, language: 'vi-VN', voice: VOICE, vietnameseOnly: true });
         await new Promise(resolve => {
           const timer = setTimeout(resolve, durationMs + 180);
           cancelPlayback = () => { clearTimeout(timer); resolve(); };
@@ -225,65 +258,79 @@ export function createAudio({ dataDir, musicDir, onEvent = () => {}, getSettings
   function say(text) { return enqueue(text, { priority: 100, tag: 'manual', manual: true }); }
   function announce(event, state) {
     if (closed || !event || event.source === 'mc') return;
-    // A new session or mode must never inherit old fight commentary.
     if (['reset', 'mode'].includes(event.type) || ['session.reset', 'match.reset', 'mode.set'].includes(event.action)) {
-      queue = []; interrupt(); lastHitAt = 0; lastQueueAt = 0; lastDefenseAt = 0; lastMatchKey = ''; return;
+      queue = []; interrupt(); lastHitAt = 0; lastQueueAt = 0; lastDefenseAt = 0; lastBigAt = 0; lastSpecialAt = 0; lastMatchKey = ''; return;
     }
     if (!settings().enabled) return;
     const at = Date.now(), match = state?.match || {};
-    const attacker = cleanText(event.attacker || match.fighters?.[event.side]?.name || 'Võ sĩ', 40);
-    const defender = cleanText(event.defender || match.fighters?.[event.target]?.name || 'đối thủ', 40);
-    const name = cleanText(event.name || event.winnerName || 'Võ sĩ', 40);
+    // Corner names are intentional: user handles can contain English, emoji or abusive text.
+    // They remain visible in game UI but are never read automatically by the commentator.
+    const attacker = cornerName(event.side), defender = cornerName(event.target || (event.side === 'red' ? 'blue' : event.side === 'blue' ? 'red' : ''));
     if (event.type === 'ko') {
-      const winner = cleanText(event.name || match.fighters?.[event.winner]?.name || '', 40);
-      const text = event.winner ? `${winner || 'Võ sĩ'} chiến thắng! Một pha kết thúc bùng nổ trên Võ Đài LIVE. Ai sẽ là người thách đấu tiếp theo?` : 'Trận đấu khép lại với kết quả hòa! Cả hai võ sĩ đã cống hiến một trận đấu tuyệt vời.';
-      enqueue(text, { priority: 95, tag: 'ko' }); return;
+      if (!['red', 'blue'].includes(event.winner)) return;
+      const title = cornerName(event.winner);
+      enqueue(`${title} chiến thắng! Hạ đo ván rồi! Một màn kết thúc đầy uy lực! Nhà vô địch tiếp tục giữ đài. Ai đủ bản lĩnh bước lên thách đấu?`, { priority: 95, tag: 'ko' }); return;
     }
     if (event.type === 'match') {
-      const key = `${match.id || ''}:${event.phase}`;
+      const key = `${match.id || ''}:${event.phase}:${match.round || 1}`;
       if (key === lastMatchKey) return;
       lastMatchKey = key;
-      if (event.phase === 'countdown') {
-        const red = cleanText(match.fighters?.red?.name || 'góc đỏ', 40), blue = cleanText(match.fighters?.blue?.name || 'góc xanh', 40);
-        enqueue(`${red} đối đầu ${blue}. Hai góc đã sẵn sàng! Bình luận đấm, móc, đá, đỡ hoặc né để ra chiêu.`, { priority: 75, tag: 'start' });
-      } else if (event.phase === 'fighting') enqueue('Chuông đã vang! Trận đấu bắt đầu!', { priority: 80, tag: 'bell' });
+      if (event.phase === 'countdown') enqueue('Hai võ sĩ đã bước lên đài! Góc đỏ, góc xanh, vào tư thế! Khán giả sẵn sàng cổ vũ nào!', { priority: 75, tag: 'start' });
+      else if (event.phase === 'fighting') enqueue(`Chuông đã vang! Hiệp ${Math.max(1, Math.round(Number(match.round) || 1))} bắt đầu! Giữ chắc găng, chọn thời điểm phản công!`, { priority: 80, tag: 'bell' });
+      else if (event.phase === 'rest') enqueue('Hết hiệp! Hai góc tranh thủ hồi sức. Trận đấu chưa kết thúc, phải có một người giành chiến thắng!', { priority: 70, tag: 'rest' });
+      else if (event.phase === 'paused') enqueue('Võ đài tạm dừng theo hiệu lệnh trọng tài. Hai bên giữ vị trí!', { priority: 65, tag: 'pause' });
       return;
     }
-    if (event.type === 'hit' && at - lastHitAt > 4000) {
+    if (event.type === 'attack.start' && at - lastBigAt > 3500) {
+      lastBigAt = at;
+      if (event.move === 'ultimate') enqueue(`${attacker} đang dồn toàn bộ sức mạnh! Tuyệt kỹ bão quyền! ${defender} phải giữ găng thật chắc!`, { priority: 72, tag: 'special' });
+      else if (event.move === 'flurry') enqueue(`${attacker} áp sát! Một, hai, ba! Liên hoàn đấm đang kéo tới!`, { priority: 58, tag: 'special' });
+    } else if (event.type === 'hit' && at - lastHitAt > 4000) {
       lastHitAt = at;
-      let text;
-      if (event.dodged) text = `${defender} né đòn rất kịp thời! ${attacker} cần chọn thời điểm tốt hơn.`;
-      else if (event.blocked) text = `${defender} đỡ được đòn của ${attacker}. Phòng thủ chắc chắn!`;
-      else if (event.move === 'ultimate' || event.move === 'flurry') text = `${attacker} tung ${moveNames[event.move]}! ${Number(event.hits) > 1 ? `${Math.min(20, Number(event.hits))} cú đánh dồn dập, ` : ''}${defender} mất ${Math.max(0, Math.round(Number(event.damage) || 0))} máu!`;
-      else text = sample([
-        `${attacker} tung ${moveNames[event.move] || 'cú đấm'} trúng đích! ${Math.max(0, Math.round(Number(event.damage) || 0))} sát thương cho ${defender}.`,
-        `${event.critical ? 'Chí mạng! ' : ''}${attacker} áp sát với một cú ${moveNames[event.move] || 'đấm'} đầy uy lực!`,
-        `${defender} đang chịu sức ép. ${attacker} nối nhịp tấn công rất tốt!`,
+      let line;
+      if (event.dodged) line = `${defender} lách người rất đẹp! Né trọn cú đánh! ${attacker} cần bình tĩnh hơn!`;
+      else if (event.blocked) line = `${defender} dựng găng kịp lúc! Một tình huống phòng thủ quá chắc chắn!`;
+      else if (event.move === 'ultimate' || event.move === 'flurry') line = `${attacker} tung ${moveNames[event.move]} trúng đích! ${defender} mất ${Math.max(0, Math.round(Number(event.damage) || 0))} máu. Khán giả ơi, sức nóng đang tăng rồi!`;
+      else line = sample([
+        `${attacker} ra ${moveNames[event.move] || 'đòn'}! Trúng đích! ${defender} phải lùi lại một nhịp!`,
+        `${event.critical ? 'Một cú đánh chí mạng! ' : ''}${attacker} áp sát! Đấm nhanh, thoát góc, không cho đối thủ kịp trở tay!`,
+        `${defender} đang chịu sức ép! Một pha nối đòn rất sắc của ${attacker.toLocaleLowerCase('vi')}!`,
       ]);
       const target = match.fighters?.[event.target];
-      if (!event.dodged && target?.hp > 0 && target.hp / target.maxHp < 0.25) text += ` ${defender} đang rất ít máu!`;
-      enqueue(text, { priority: event.gift ? 55 : 20, tag: 'hit' });
+      if (!event.dodged && target?.hp > 0 && target.hp / target.maxHp < .25) line += ` ${defender} đang ít máu! Cơ hội lật ngược vẫn còn!`;
+      enqueue(line, { priority: event.gift ? 55 : 20, tag: 'hit' });
     } else if (event.type === 'gift') {
-      const coins = Math.max(0, Math.round(Number(event.coins) || 0));
-      if (!coins) return;
+      const coins = Math.max(0, Math.round(Number(event.coins) || 0)); if (!coins) return;
       const corner = event.side === 'red' ? 'góc đỏ' : event.side === 'blue' ? 'góc xanh' : '';
-      enqueue(`Cảm ơn ${name} tặng ${coins} xu! ${corner ? `${corner} nhận thêm sức mạnh${event.move ? ` cho đòn ${moveNames[event.move] || 'đặc biệt'}` : ''}!` : 'Võ đài đang chờ màn xuất hiện của bạn!'}`, { priority: 60, tag: 'gift' });
+      const move = event.action || event.move;
+      const effect = move === 'heal' ? 'nhận lượt tiếp sức hồi máu, sẵn sàng bám trụ!' : move === 'boost' ? 'nhận lượt tăng sức mạnh, chờ thời điểm phản công!' : move === 'shield' ? 'nhận lá chắn bảo vệ!' : `sẵn sàng tung ${moveNames[move] || 'đòn đặc biệt'}!`;
+      enqueue(`Cảm ơn phần cổ vũ ${coins} xu! ${corner ? `${corner} ${effect}` : 'Thêm một người thách đấu đã đăng ký. Võ đài đang chờ bạn!'}`, { priority: 60, tag: 'gift' });
+    } else if (['heal', 'boost', 'buff', 'comeback', 'pressure', 'overtime'].includes(event.type) && at - lastSpecialAt > 4500) {
+      if (event.type === 'heal' && (event.limited || Number(event.amount) <= 0)) return;
+      lastSpecialAt = at;
+      const lines = {
+        heal: `${attacker} vừa được tiếp sức hồi máu! Trận đấu lại nóng lên!`,
+        boost: `${attacker} bùng nổ sức mạnh! Đừng bỏ lỡ thời cơ ra đòn!`,
+        buff: `${attacker} được tăng sức mạnh! Đối thủ cần giữ khoảng cách!`,
+        comeback: `${attacker} đang phản kháng! Ít máu chưa có nghĩa là hết cơ hội. Một cú lật kèo có thể đến bất cứ lúc nào!`,
+        pressure: 'Trận đấu bước vào thời khắc quyết định! Áp lực tăng cao, từng cú đấm đều có thể kết thúc cuộc so găng!',
+        overtime: 'Hiệp quyết định đã tới! Không còn chỗ cho sự do dự, phải có một nhà vô địch trên võ đài!',
+      };
+      enqueue(lines[event.type], { priority: 64, tag: 'tactics' });
     } else if (event.type === 'queue' && event.action !== 'remove' && at - lastQueueAt > 6000) {
       lastQueueAt = at;
-      enqueue(`${name} đã vào hàng chờ thách đấu. Ai sẽ giữ được ngôi vương trên võ đài?`, { priority: 35, tag: 'queue' });
+      enqueue('Thêm một người thách đấu vào hàng chờ! Nhà vô địch sẽ phải bảo vệ ngôi vị trước những đối thủ mới!', { priority: 35, tag: 'queue' });
     } else if (event.type === 'defend' && at - lastDefenseAt > 12000) {
       lastDefenseAt = at;
-      enqueue(`${attacker} ${event.move === 'dodge' ? 'di chuyển né đòn' : 'dựng găng phòng thủ'}. Giữ thể lực để phản công!`, { priority: 15, tag: 'defend' });
-    } else if (event.type === 'announcement' && event.text) {
-      enqueue(event.text, { priority: number(event.priority, 30, 1, 85), tag: 'arena' });
+      enqueue(`${attacker} ${event.move === 'dodge' ? 'di chuyển né đòn' : 'dựng găng phòng thủ'}. Giữ thể lực, chờ một cú phản công thật sắc!`, { priority: 15, tag: 'defend' });
     }
     if (match.phase === 'fighting' && at - lastInviteAt > settings().idle * 1000 && !busy && queue.length === 0) {
       lastInviteAt = at;
       const entry = Math.max(0, Math.round(Number(state?.settings?.entryCoins) || 0));
       enqueue(sample([
-        'Cổ vũ góc đỏ hay góc xanh? Bình luận chọn góc, rồi tặng quà để kích hoạt combo theo bảng quà trên màn hình!',
-        entry ? `Muốn trực tiếp so găng? Tặng đủ ${entry} xu để vào hàng chờ thách đấu. Luật quà được hiển thị công khai ở bảng điều khiển.` : 'Muốn lên đài? Bình luận lên đài để tham gia hàng chờ. Hãy so tài phản xạ với các đối thủ!',
-        'Đòn mạnh cần đúng thời điểm! Theo dõi thanh năng lượng, bình luận ra chiêu và cổ vũ cho võ sĩ bạn yêu thích!',
+        'Khán giả chọn góc đỏ hay góc xanh? Tặng đúng mức xu trên bảng cổ vũ để kích hoạt liên hoàn, tuyệt kỹ, hồi máu hoặc tăng sức mạnh cho góc mình yêu thích!',
+        entry ? `Muốn tự mình so găng? Tặng đủ ${entry} xu để đăng ký thách đấu. Danh hiệu giữ đài đang chờ chủ nhân tiếp theo!` : 'Muốn lên đài? Bình luận lên đài để đăng ký. Hãy thử bản lĩnh của chính mình!',
+        'Sức mạnh cần đúng thời điểm! Một lượt hồi máu hay một tuyệt kỹ đúng lúc có thể đảo ngược trận đấu. Cổ vũ theo bảng xu của từng góc nhé!',
       ]), { priority: 5, tag: 'invite' });
     }
   }
@@ -297,7 +344,7 @@ export function createAudio({ dataDir, musicDir, onEvent = () => {}, getSettings
     try { currentTts?.close(); } catch {}
   }
   return { announce, say, music, saveMusic, deleteMusic, close,
-    status: () => ({ enabled: settings().enabled, voice: VOICE, offline, busy, queued: queue.length, fallback: offline || Date.now() < synthUnavailableUntil, error: latestError }),
+    status: () => ({ enabled: settings().enabled, voice: VOICE, provider: 'microsoft-edge', language: 'vi-VN', vietnameseOnly: true, offline, busy, queued: queue.length, fallback: offline || Date.now() < synthUnavailableUntil, lastSynthesisAt, error: latestError || (offline ? 'Đang ngoại tuyến: chỉ dùng giọng Việt trên máy; nếu chưa cài thì MC hiện chữ.' : '') }),
     scanMusic,
   };
 }

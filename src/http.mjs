@@ -45,7 +45,7 @@ function sendFile(req,res,file){
   const stream=fs.createReadStream(file,{start,end});stream.on('error',()=>res.destroy());stream.pipe(res);
  });
 }
-export function createHttp({auth,getPort,handleRpc,audio,exportState}){
+export function createHttp({auth,getPort,handleRpc,audio,exportState,version}){
  return http.createServer(async(req,res)=>{
   try{
    if(!auth.goodHost(req.headers.host)){json(res,421,{error:'Host không được phép.'});return;}
@@ -71,7 +71,7 @@ export function createHttp({auth,getPort,handleRpc,audio,exportState}){
     const data=JSON.stringify(exportState(),null,2);res.writeHead(200,{...HEADERS,'Content-Type':'application/json; charset=utf-8','Content-Disposition':'attachment; filename="vo-dai-live-state.json"'}).end(req.method==='HEAD'?'':data);return;
    }
    if(!['GET','HEAD'].includes(req.method)){res.writeHead(405).end();return;}
-   if(p==='/health'){json(res,200,{ok:true,app:'vo-dai-live',version:'1.0.0',port:getPort()});return;}
+   if(p==='/health'){json(res,200,{ok:true,app:'vo-dai-live',version:version||'1.1.0',port:getPort()});return;}
    if(p==='/')p='/index.html';
    if(p==='/index.html'){
     if(!isLocal(req)){json(res,403,{error:'Chỉ mở bảng điều khiển trên máy này.'});return;}

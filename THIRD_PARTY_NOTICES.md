@@ -8,7 +8,7 @@ Người dùng cung cấp các archive của **Thắp Sáng Bản Đồ Việt N
 
 `assets/gifts.json` bắt nguồn từ catalog quà TikTok trong bộ người dùng cung cấp. Tên quà, logo/ảnh quà và avatar người xem có thể thuộc TikTok hoặc chủ thể tương ứng. URL ảnh là tài nguyên bên ngoài, không được hiểu là chuyển giao bản quyền ảnh. Chưa có thông tin chứng minh quyền sở hữu/giấy phép riêng của người đóng gói catalog; không tạo tuyên bố tác giả hoặc giấy phép giả cho dữ liệu này.
 
-Thiết kế võ sĩ và hiệu ứng của bản boxing dùng các hình/animation trong source và âm thanh tổng hợp của trình duyệt, không kèm nhạc trong bộ phân tích gốc. Nếu thêm nhạc, hình ảnh hay mô hình mới, cần giữ nguồn/giấy phép tương ứng. Tên TikTok, Microsoft, OBS và các thương hiệu dùng để mô tả tích hợp, không hàm ý được bảo trợ.
+Thiết kế võ sĩ và hiệu ứng bản 1.1 dùng minh họa SVG 2D người trưởng thành với cơ thể/khớp, gradient và animation gốc trong source, không dùng likeness người nổi tiếng, ảnh người thật hay model 3D tải từ ngoài. Âm thanh hiệu ứng được tổng hợp bởi trình duyệt; không kèm nhạc trong bộ phân tích gốc. Nếu thêm nhạc, hình ảnh hay mô hình mới, cần giữ nguồn/giấy phép tương ứng. Tên TikTok, Microsoft, OBS và các thương hiệu dùng để mô tả tích hợp, không hàm ý được bảo trợ.
 
 ## Dependencies trực tiếp
 
@@ -17,6 +17,7 @@ Thiết kế võ sĩ và hiệu ứng của bản boxing dùng các hình/animat
 | tiktok-live-connector | 2.5.0 | AGPL-3.0-only |
 | msedge-tts | 2.1.1 | MIT |
 | ws | 8.22.2 | MIT |
+| https-proxy-agent | 5.0.1 | MIT |
 
 Xem `package-lock.json` để biết chính xác dependencies bắc cầu và integrity của bản cài; các package con có thông báo và license riêng. Ví dụ `tiktok-live-proto` thuộc AGPL-3.0-only; SDK TikTok LIVE API và nhiều thư viện khác dùng MIT. Không mặc định mọi package bắc cầu đều MIT.
 
@@ -43,10 +44,11 @@ Script đóng gói chỉ đưa `node.exe` từ đường dẫn người đóng g
 - TikTok LIVE/ảnh quà: theo điều kiện dịch vụ và quyền tài nguyên của nhà cung cấp.
 - EulerStream: dịch vụ ký kết nối tùy chọn; key, quota và điều kiện thuộc nhà cung cấp.
 - Microsoft Edge TTS (`vi-VN-NamMinhNeural`) qua msedge-tts: là tích hợp dịch vụ ngoài, không phải mô hình giọng được phân phối trong source.
-- SpeechSynthesis/Web Audio: API trình duyệt; tính khả dụng và voice tùy môi trường.
+- SpeechSynthesis/Web Audio: API trình duyệt; tính khả dụng và voice tùy môi trường. Bản1.1 chỉ chọn voice có mã tiếng Việt; thiếu voice thì hiện chữ/cảnh báo, không chọn mặc định tiếng Anh.
+- https-proxy-agent: helper MIT để giữ đường proxy kế thừa cho WebSocket TTS; không thay giấy phép/điều kiện của Microsoft.
 
 Không có license key ứng dụng trong Võ Đài LIVE. Điều đó không thay thế điều kiện của các dependencies, dịch vụ hoặc tài nguyên bên thứ ba.
 
-## Runtime của gói bàn giao 1.0.0
+## Runtime của gói bàn giao 1.0.0 và 1.1.0
 
 Runtime Windows x64 đóng kèm có SHA-256 `ba4e6d110e8c1592a1ecd390f6b05f3da124b13871a5be62b341a07a853c6c32`, đã đối chiếu đúng mục `win-x64/node.exe` trong SHASUMS256 lấy qua HTTPS chính thức Node v24.21.0. `assets/NODE-LICENSE.txt` giữ thông báo runtime và `assets/node-v24.21.0-SHASUMS256.txt` giữ danh sách checksum đối chiếu. Đây là kiểm chứng checksum, không phải xác nhận đã thực thi runtime hoặc kiểm chữ ký Authenticode trên Windows.

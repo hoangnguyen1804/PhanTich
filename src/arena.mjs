@@ -2,12 +2,19 @@
 // Monetary admission, event deduplication and rankings live here, never in the browser.
 import { randomUUID } from 'node:crypto';
 
+export const DEFAULT_CORNER_GIFTS = Object.freeze([
+  {coins:5,side:'red',action:'flurry'},{coins:6,side:'blue',action:'flurry'},
+  {coins:30,side:'red',action:'ultimate'},{coins:50,side:'blue',action:'ultimate'},
+  {coins:10,side:'red',action:'heal'},{coins:20,side:'blue',action:'heal'},
+  {coins:99,side:'red',action:'boost'},{coins:100,side:'blue',action:'boost'},
+].map(Object.freeze));
 export const DEFAULT_SETTINGS = Object.freeze({
-  title: 'VÕ ĐÀI LIVE', roundSeconds: 120, countdownSeconds: 4, maxHp: 1000,
-  entryCoins: 1, commentCooldownMs: 1000, giftDamageCap: 300,
-  autoNext: true, holdWinnerSeconds: 8, mcEnabled: true, mcVolume: 80,
+  title: 'VÕ ĐÀI LIVE', roundSeconds: 120, countdownSeconds: 4, maxHp: 1600,
+  entryCoins: 1, commentCooldownMs: 1000, giftDamageCap: 180,
+  autoNext: true, autoSparring: true, restSeconds: 8, holdWinnerSeconds: 8, mcEnabled: true, mcVolume: 80,
   mcRate: 15, mcIdleSeconds: 35, musicEnabled: false, musicVolume: 25,
   sfxVolume: 70, theme: 'electric', showCommands: true, phoneEnabled: false,
+  cornerGifts: DEFAULT_CORNER_GIFTS,
   giftMap: Object.freeze({ '5655': 'jab', '5487': 'flurry', '5879': 'uppercut', '5587': 'ultimate' }),
 });
 export const MOVES = Object.freeze({
@@ -20,6 +27,7 @@ export const MOVES = Object.freeze({
 });
 export const GIFT_ACTIONS = Object.freeze([
   ...Object.entries(MOVES).map(([id, move]) => ({ id, label: move.label, emoji: ({ jab: '🥊', hook: '💥', uppercut: '⚡', kick: '🦵', flurry: '🔥', ultimate: '🌪️' })[id] })),
+  { id: 'boost', label: 'Tăng sát thương', emoji: '💪' },
   { id: 'heal', label: 'Hồi máu', emoji: '💚' },
   { id: 'shield', label: 'Lá chắn', emoji: '🛡️' },
   { id: 'entry', label: 'Vé lên đài', emoji: '🎟️' },
@@ -38,24 +46,32 @@ const safeAvatar = s => { try { const u = new URL(String(s)); return u.protocol 
 const opposite = side => side === 'red' ? 'blue' : 'red';
 const error = message => { throw new Error(message); };
 const makeStats = () => ({ matches: 0, punches: 0, coins: 0, viewers: 0 });
-const makeMatch = number => ({ id: randomUUID(), number, phase: 'waiting', fighters: { red: null, blue: null }, result: null, remainingMs: 0, countdownMs: 0, deadline: 0, pausedPhase: '', pausedAt: 0, manualHold: false, nextAt: 0 });
+const makeMatch = number => ({ id: randomUUID(), number, phase: 'waiting', round:1, pressure:1, healMultiplier:1,overtime:false, fighters: { red: null, blue: null }, result: null, remainingMs: 0, countdownMs: 0, deadline: 0, pausedPhase: '', pausedAt: 0, manualHold: false, nextAt: 0 });
 const makeSession = () => ({ match: makeMatch(1), queue: [], records: {}, supporters: {}, stats: makeStats(), recent: [] });
 
 function cleanSettings(input = {}, base = DEFAULT_SETTINGS) {
-  const out = { ...base, giftMap: { ...base.giftMap } };
+  const out = { ...base, giftMap: { ...base.giftMap }, cornerGifts: clone(base.cornerGifts || DEFAULT_CORNER_GIFTS) };
   if (!input || typeof input !== 'object' || Array.isArray(input)) return out;
   const ranges = {
-    roundSeconds: [15, 900], countdownSeconds: [0, 15], maxHp: [100, 10000], entryCoins: [0, 100000],
+    restSeconds: [2, 20], roundSeconds: [15, 900], countdownSeconds: [0, 15], maxHp: [100, 10000], entryCoins: [0, 100000],
     commentCooldownMs: [300, 10000], giftDamageCap: [10, 2000], holdWinnerSeconds: [2, 60],
     mcVolume: [0, 100], mcRate: [-50, 50], mcIdleSeconds: [15, 300], musicVolume: [0, 100], sfxVolume: [0, 100],
   };
   for (const [key, [min, max]] of Object.entries(ranges)) if (own(input, key)) out[key] = int(input[key], min, max, base[key]);
-  for (const key of ['autoNext', 'mcEnabled', 'musicEnabled', 'showCommands', 'phoneEnabled']) if (typeof input[key] === 'boolean') out[key] = input[key];
+  for (const key of ['autoNext', 'autoSparring', 'mcEnabled', 'musicEnabled', 'showCommands', 'phoneEnabled']) if (typeof input[key] === 'boolean') out[key] = input[key];
   if (own(input, 'title')) out.title = text(input.title, 40) || DEFAULT_SETTINGS.title;
   if (['electric', 'ember', 'ice'].includes(input.theme)) out.theme = input.theme;
   if (input.giftMap && typeof input.giftMap === 'object' && !Array.isArray(input.giftMap)) {
     out.giftMap = {};
     for (const [id, move] of Object.entries(input.giftMap).slice(0, 150)) if (/^\d{1,20}$/.test(id) && GIFT_IDS.has(move)) out.giftMap[id] = move;
+  }
+  if (own(input,'cornerGifts')) {
+    if(!Array.isArray(input.cornerGifts)||input.cornerGifts.length>32) error('Bảng quà góc đài phải có tối đa 32 dòng.');
+    const used=new Set(); out.cornerGifts=input.cornerGifts.map(rule=>{
+      if(!rule||!Number.isInteger(Number(rule.coins))||Number(rule.coins)<1||Number(rule.coins)>100000||!SIDES.includes(rule.side)||!GIFT_IDS.has(rule.action)||rule.action==='entry')error('Mỗi dòng cần xu nguyên 1–100.000, góc đỏ/xanh và hành động hợp lệ.');
+      const coins=Number(rule.coins);if(used.has(coins))error(`Mức ${coins} xu bị trùng. Mỗi mức xu chỉ gán một góc và hành động.`);used.add(coins);
+      return {coins,side:rule.side,action:rule.action};
+    });
   }
   return out;
 }
@@ -71,7 +87,8 @@ function cleanRecord(r, uid) {
 }
 
 export function createArena({ initial = {}, onEvent = () => {}, onSave = () => {}, now = Date.now, random = Math.random } = {}) {
-  let settings = cleanSettings(initial.settings);
+  let settings;
+  try{settings=cleanSettings(initial.settings);}catch{settings=cleanSettings({...initial.settings,cornerGifts:DEFAULT_CORNER_GIFTS});}
   let mode = initial.mode === 'demo' ? 'demo' : 'live';
   let sessions = { live: restore(initial.live || initial.session), demo: makeSession() };
   let transient = freshTransient();
@@ -80,7 +97,7 @@ export function createArena({ initial = {}, onEvent = () => {}, onSave = () => {
   let lastSnapshotSecond = -1;
   let eventSeq = 0;
 
-  function freshTransient() { return { viewers: new Set(), selections: new Map(), cooldowns: new Map(), attacks: new Map(), defense: new Map(), gifts: new Map(), matchEventAt: 0 }; }
+  function freshTransient() { return { viewers: new Set(), selections: new Map(), cooldowns: new Map(), attacks: new Map(), defense: new Map(), gifts: new Map(), pending: new Map(), supportQueue: [], healWindows: new Map(), nextAutoAt: 0, autoSide:'red', matchEventAt: 0 }; }
   function current() { return sessions[mode]; }
   function restore(saved = {}) {
     const result = makeSession();
@@ -143,14 +160,14 @@ export function createArena({ initial = {}, onEvent = () => {}, onSave = () => {
   }
   function fighter(user) {
     const r = record(user);
-    return { uid: user.uid, name: user.name, avatar: user.avatar || '', hp: settings.maxHp, maxHp: settings.maxHp, stamina: 100, maxStamina: 100, energy: 0, damage: 0, combo: 0, wins: r.wins, streak: r.streak };
+    return { uid: user.uid, name: user.name, avatar: user.avatar || '', hp: settings.maxHp, maxHp: settings.maxHp, stamina: 100, maxStamina: 100, energy: 0, damage: 0, combo: 0, powerMultiplier:1, buffUntil:0, guardUntil:0, comebackUsed:false, wins: r.wins, streak: r.streak };
   }
-  function clearCombat() { transient.cooldowns.clear(); transient.attacks.clear(); transient.defense.clear(); }
+  function clearCombat() { transient.cooldowns.clear(); transient.attacks.clear(); transient.defense.clear(); transient.pending.clear();transient.supportQueue=[];transient.healWindows.clear();transient.nextAutoAt=now()+2800;transient.autoSide=random()<.5?'red':'blue'; }
   function makeNewMatch({ keepWinner = false, keepBoth = false } = {}) {
     const s = current(), previous = s.match;
     let red = null, blue = null;
     if (keepBoth) { red = previous.fighters.red; blue = previous.fighters.blue; }
-    else if (keepWinner && previous.result?.winner) red = previous.fighters[previous.result.winner];
+    else if (keepWinner && previous.result?.winner) {if(previous.result.winner==='red')red=previous.fighters.red;else blue=previous.fighters.blue;}
     s.match = makeMatch(previous.number + (previous.phase === 'finished' ? 1 : 0));
     if (red) s.match.fighters.red = fighter(red);
     if (blue) s.match.fighters.blue = fighter(blue);
@@ -193,8 +210,8 @@ export function createArena({ initial = {}, onEvent = () => {}, onSave = () => {
   }
   function finishMatch(winner, reason = 'decision') {
     const s = current(), m = s.match;
-    if (!['fighting', 'paused', 'countdown'].includes(m.phase)) error('Hiện chưa có trận để kết thúc.');
-    if (winner !== null && !SIDES.includes(winner)) error('Góc thắng phải là đỏ, xanh hoặc hòa.');
+    if (!['fighting', 'paused', 'countdown','rest'].includes(m.phase)) error('Hiện chưa có trận để kết thúc.');
+    if (!SIDES.includes(winner)) error('Trận không có kết quả hòa. Chọn rõ góc đỏ hoặc xanh thắng; hoặc tiếp tục thi đấu đến khi hạ gục.');
     const winningFighter = winner ? m.fighters[winner] : null;
     if (winner && !winningFighter) error('Góc thắng không có võ sĩ.');
     m.phase = 'finished'; m.remainingMs = 0; m.countdownMs = 0; m.deadline = 0;
@@ -224,7 +241,8 @@ export function createArena({ initial = {}, onEvent = () => {}, onSave = () => {
     if (!a || !d) return { ok: false, reason: 'no_opponent' };
     if (!MOVES[move]) return { ok: false, reason: 'invalid_move' };
     const model = MOVES[move], time = now(), prev = transient.attacks.get(a.uid);
-    if (!opts.gift) {
+    if(!opts.resolve&&transient.pending.has(side))return {ok:false,reason:'busy',message:'Võ sĩ đang thực hiện chuỗi đòn.'};
+    if (!opts.gift && !opts.resolve) {
       if (time - (transient.cooldowns.get(a.uid) ?? -Infinity) < settings.commentCooldownMs) return { ok: false, reason: 'cooldown', message: 'Đòn đang hồi, hãy chờ nhịp tiếp theo.' };
       if (move === 'ultimate' && a.energy < 100) return { ok: false, reason: 'energy', message: 'Cần đầy 100 năng lượng để tung Bão quyền.' };
       if (a.stamina < model.stamina) return { ok: false, reason: 'stamina', message: 'Thể lực thấp, hãy nghỉ hoặc đỡ đòn.' };
@@ -232,16 +250,25 @@ export function createArena({ initial = {}, onEvent = () => {}, onSave = () => {
       transient.cooldowns.set(a.uid, time);
       a.energy = move === 'ultimate' ? 0 : Math.min(100, a.energy + model.energy);
     }
+    if(!opts.resolve){
     a.combo = prev && time - prev.at <= 3200 ? Math.min(20, a.combo + 1) : 1;
     transient.attacks.set(a.uid, { at: time, move });
+    }
+    if(!opts.resolve&&['flurry','ultimate'].includes(move)){
+      const durationMs=move==='ultimate'?2400:1400,sequenceId=randomUUID();
+      transient.pending.set(side,{side,move,opts:{...opts,resolve:true,sequenceId,choreographed:true},matchId:m.id,impactAt:time+durationMs,startedAt:time,durationMs});
+      emit('attack.start',{side,target,move,sequenceId,durationMs,impactAt:time+durationMs,hits:model.hits,attacker:a.name,defender:d.name,gift:!!opts.gift});
+      dirty=true;return {ok:true,windup:true,queued:true,sequenceId,impactAt:time+durationMs,durationMs,move,side,target};
+    }
     const defense = transient.defense.get(d.uid);
     const dodged = !!(defense?.move === 'dodge' && defense.until > time);
     const blocked = !dodged && !!(defense?.move === 'block' && defense.until > time);
     // Consumed defense cannot make a fighter invulnerable to a long paid burst.
     if (defense && defense.until > time) transient.defense.delete(d.uid);
     const critical = !dodged && !blocked && random() < 0.1;
-    const baseDamage = opts.gift ? clamp(opts.damage, 1, settings.giftDamageCap) : model.damage * (1 + Math.min(a.combo - 1, 4) * 0.04);
-    let damage = dodged ? 0 : Math.round(baseDamage * (critical ? 1.3 : 1) * (blocked ? 0.28 : 1));
+    const power=a.buffUntil>time?a.powerMultiplier:1;
+    const baseDamage = (opts.gift ? clamp(opts.damage, 1, settings.giftDamageCap) : model.damage * (1 + Math.min(a.combo - 1, 4) * 0.04)*(opts.auto?0.7:1)) * power * m.pressure;
+    let damage = dodged ? 0 : Math.round(baseDamage * (critical ? 1.3 : 1) * (blocked ? 0.28 : 1)*(d.guardUntil>time?0.65:1));
     // Coins never bypass the hard gift ceiling, including a critical hit.
     damage = Math.min(d.hp, opts.gift ? Math.min(settings.giftDamageCap, damage) : damage);
     damage = Math.max(0, damage);
@@ -250,9 +277,10 @@ export function createArena({ initial = {}, onEvent = () => {}, onSave = () => {
     if (dodged) d.stamina = Math.min(100, d.stamina + 5);
     const hits = opts.hits || model.hits;
     s.stats.punches += hits;
-    emit('hit', { side, target, move, damage, hits, critical, blocked, dodged, combo: a.combo, gift: !!opts.gift, attacker: a.name, defender: d.name });
+    emit('hit', { side, target, move, damage, hits, critical, blocked, dodged, combo: a.combo, gift: !!opts.gift, auto:!!opts.auto, sequenceId:opts.sequenceId||'',choreographed:!!opts.choreographed,attacker: a.name, defender: d.name });
     if (opts.gift || critical || a.combo >= 3 || damage === 0) log('hit', `${a.name}: ${model.label}${opts.gift ? ' từ quà' : ''} ${dodged ? '— đối thủ né thành công' : blocked ? `— bị đỡ, ${damage} sát thương` : `— ${damage} sát thương`}.`);
     dirty = true;
+    if(d.hp>0&&d.hp<=d.maxHp*.25&&!d.comebackUsed){d.comebackUsed=true;d.guardUntil=time+8000;d.stamina=Math.min(100,d.stamina+30);emit('comeback',{side:target,name:d.name,durationMs:8000});log('comeback',`${d.name} bước vào nhịp phản công: giáp giảm sát thương trong 8 giây!`);}
     if (d.hp <= 0) finishMatch(side, 'ko');
     return { ok: true, damage, move, side, target, blocked, dodged, critical };
   }
@@ -270,9 +298,42 @@ export function createArena({ initial = {}, onEvent = () => {}, onSave = () => {
     dirty = true;
     return { ok: true, side, move };
   }
+  function applySupport(side,move,coins){
+    const m=current().match,f=m.fighters[side],time=now();if(!f||m.phase!=='fighting')return {ok:false,reason:'not_fighting'};
+    if(move==='heal'){
+      let w=transient.healWindows.get(side);if(!w||time-w.at>=10000){w={at:time,total:0};transient.healWindows.set(side,w);}
+      const budget=Math.round(f.maxHp*.15*m.healMultiplier/m.pressure),amount=Math.max(0,Math.min(budget-w.total,Math.round(f.maxHp*.15*m.healMultiplier/m.pressure),f.maxHp-f.hp));
+      f.hp+=amount;w.total+=amount;emit('heal',{side,amount,name:f.name,limited:amount===0});return {ok:true,healed:amount};
+    }
+    if(move==='boost'){f.powerMultiplier=1.3;f.buffUntil=time+12000;emit('boost',{side,name:f.name,multiplier:1.3,durationMs:12000});return {ok:true,boost:1.3};}
+    if(move==='shield'){transient.defense.set(f.uid,{move:'block',until:time+5000});emit('defend',{side,move:'block',name:f.name,gift:true});return {ok:true,shield:true};}
+    const damage=Math.min(settings.giftDamageCap,move==='ultimate'?175:move==='flurry'?110:coins>=30?130:coins>=5?80:35);
+    return attack(side,move,{gift:true,damage});
+  }
+  function queueSupport(side,move,coins){
+    const m=current().match;
+    if(m.phase==='fighting'&&!transient.pending.has(side)&&!transient.supportQueue.some(x=>x.side===side))return applySupport(side,move,coins);
+    if(transient.supportQueue.filter(x=>x.side===side).length>=12)return {ok:false,reason:'support_queue_full',message:'Hàng hiệu ứng góc này đã đủ 12 lượt. Xu vẫn được ghi nhận; chờ chuỗi hiện tại kết thúc.'};
+    transient.supportQueue.push({matchId:m.id,side,move,coins});return {ok:true,queued:true,position:transient.supportQueue.filter(x=>x.side===side).length};
+  }
+  function processAttacks(time){
+    const m=current().match;
+    const due=[...transient.pending.values()].filter(p=>p.impactAt<=time).sort((a,b)=>a.impactAt-b.impactAt);
+    for(const p of due){
+      transient.pending.delete(p.side);
+      if(p.matchId===m.id&&m.phase==='fighting')attack(p.side,p.move,p.opts);
+      if(m.phase==='finished')return;
+    }
+    for(const side of SIDES){
+      if(transient.pending.has(side))continue;
+      const i=transient.supportQueue.findIndex(x=>x.side===side);if(i<0)continue;
+      const [q]=transient.supportQueue.splice(i,1);if(q.matchId===m.id&&m.phase==='fighting')applySupport(q.side,q.move,q.coins);
+      if(m.phase==='finished')return;
+    }
+  }
   function admitGift(user, payload) {
     const s = current(), at = now();
-    if (!Number.isFinite(Number(payload.coins)) || Number(payload.coins) <= 0) return { ok: false, reason: 'invalid_coins', message: 'Số xu quà phải lớn hơn 0.' };
+    if (!Number.isSafeInteger(Number(payload.coins)) || Number(payload.coins) <= 0) return { ok: false, reason: 'invalid_coins', message: 'Số xu quà phải lớn hơn 0.' };
     const coins = int(payload.coins, 1, 1000000, 1);
     const eventId = text(payload.eventId, 200);
     if (eventId) {
@@ -288,30 +349,21 @@ export function createArena({ initial = {}, onEvent = () => {}, onSave = () => {
     if (Object.keys(s.supporters).length > 5000) {
       const least = Object.values(s.supporters).sort((a, b) => a.coins - b.coins)[0]; if (least) delete s.supporters[least.uid];
     }
-    const ownSide = sideOf(user.uid), selected = transient.selections.get(user.uid);
-    const side = ownSide || (selected && s.match.fighters[selected] ? selected : null);
-    const giftId = String(payload.giftId || '').replace(/\D/g, '').slice(0, 20);
-    const mapped = settings.giftMap[giftId];
-    const move = mapped || (coins >= 100 ? 'ultimate' : coins >= 30 ? 'uppercut' : coins >= 5 ? 'flurry' : 'jab');
+    if(payload.isStreakCorrection===true){log('gift',`${user.name}: ghi nhận bổ sung ${coins} xu của chuỗi quà cũ, không kích hoạt lại hiệu ứng.`);emit('gift.correction',{uid:user.uid,name:user.name,coins,streakCoins:Number(payload.streakCoins)||0});dirty=true;return {ok:true,creditedOnly:true,coins};}
+    const ownSide=sideOf(user.uid),selected=transient.selections.get(user.uid);
+    const hasTwo=!!(s.match.fighters.red&&s.match.fighters.blue);
+    const route=hasTwo?settings.cornerGifts.find(rule=>rule.coins===coins):null;
+    const side=route?.side||ownSide||(selected&&s.match.fighters[selected]?selected:null);
+    const giftId=String(payload.giftId||'').replace(/\D/g,'').slice(0,20);
+    const mapped=settings.giftMap[giftId];
+    const move=route?.action||mapped||(coins>=100?'ultimate':coins>=30?'uppercut':coins>=5?'flurry':'jab');
     let result;
-    if (!side || move === 'entry') {
-      // Admission uses cumulative coins for this session, never arbitrary comment text.
-      if (r.coins >= settings.entryCoins) result = addQueue(user);
-      else result = { ok: true, remainingCoins: Math.max(0, settings.entryCoins - r.coins) };
-    } else if (s.match.phase === 'fighting') {
-      if (move === 'heal') {
-        const f = s.match.fighters[side], amount = Math.min(settings.giftDamageCap, Math.round(f.maxHp * 0.15));
-        const healed = Math.min(f.maxHp - f.hp, amount); f.hp += healed;
-        emit('heal', { side, amount: healed, name: f.name }); result = { ok: true, healed };
-      } else if (move === 'shield') {
-        const f = s.match.fighters[side]; transient.defense.set(f.uid, { move: 'block', until: at + 5000 });
-        emit('defend', { side, move: 'block', name: f.name, gift: true }); result = { ok: true, shield: true };
-      } else {
-        const damage = Math.min(settings.giftDamageCap, coins >= 1000 ? 300 : coins >= 100 ? 240 : coins >= 30 ? 160 : coins >= 5 ? 105 : 45);
-        result = attack(side, move, { gift: true, damage });
-      }
-    } else result = { ok: true, pending: true, message: 'Quà đã được ghi nhận; đòn chỉ được tung trong thời gian thi đấu.' };
-    emit('gift', { uid: user.uid, name: user.name, coins, giftId, giftName: text(payload.giftName || 'Quà tặng', 60), move, side });
+    if(!side||move==='entry'){
+      if(r.coins>=settings.entryCoins)result=addQueue(user);else result={ok:true,remainingCoins:Math.max(0,settings.entryCoins-r.coins)};
+    }else if(['fighting','countdown','rest','paused'].includes(s.match.phase)){
+      result=queueSupport(side,move,coins);
+    }else result={ok:true,pending:false,message:'Quà đã được ghi nhận; trận đã kết thúc, không tung thêm đòn.'};
+    emit('gift', { uid: user.uid, name: user.name, coins, giftId, giftName: text(payload.giftName || 'Quà tặng', 60), move, side, routed:!!route, queued:!!result.queued });
     log('gift', `${user.name} tặng ${coins} xu${side ? ` cho góc ${side === 'red' ? 'đỏ' : 'xanh'}` : ' để lên đài'}.`);
     dirty = true;
     return { ...result, coins, move, side };
@@ -361,7 +413,7 @@ export function createArena({ initial = {}, onEvent = () => {}, onSave = () => {
     const timeLeft = phase => m.phase === phase ? Math.max(0, m.deadline - time) : m.phase === 'paused' && m.pausedPhase === phase ? (phase === 'countdown' ? m.countdownMs : m.remainingMs) : 0;
     return clone({
       mode, now: time,
-      match: { id: m.id, number: m.number, phase: m.phase, remainingMs: timeLeft('fighting') || (['waiting', 'countdown'].includes(m.phase) ? m.remainingMs : 0), countdownMs: timeLeft('countdown'), fighters: m.fighters, result: m.result },
+      match: { id: m.id, number: m.number, round:m.round,pressure:m.pressure,healMultiplier:m.healMultiplier,overtime:m.overtime,activeActions:[...transient.pending.values()].map(p=>({side:p.side,move:p.move,sequenceId:p.opts.sequenceId,impactAt:p.impactAt,durationMs:p.durationMs})),supportQueue:transient.supportQueue.length,phase: m.phase, remainingMs: timeLeft('rest') || timeLeft('fighting') || (['waiting', 'countdown'].includes(m.phase) ? m.remainingMs : 0), countdownMs: timeLeft('countdown'), fighters: Object.fromEntries(SIDES.map(side=>{const f=m.fighters[side];return [side,f?{...f,powerMultiplier:f.buffUntil>(m.phase==='paused'?m.pausedAt:time)?f.powerMultiplier:1,buffRemainingMs:Math.max(0,f.buffUntil-(m.phase==='paused'?m.pausedAt:time)),guardRemainingMs:Math.max(0,f.guardUntil-(m.phase==='paused'?m.pausedAt:time))}:null];})), result: m.result },
       queue: s.queue, leaderboard: Object.values(s.records).filter(r => r.wins > 0 || r.coins > 0).sort((a, b) => b.wins - a.wins || b.kos - a.kos || b.coins - a.coins).slice(0, 20).map(({ seenAt, ...row }) => row),
       supporters: Object.values(s.supporters).sort((a, b) => b.coins - a.coins).slice(0, 10), stats: s.stats, settings,
       recent: s.recent,
@@ -382,7 +434,7 @@ export function createArena({ initial = {}, onEvent = () => {}, onSave = () => {
       if (!p || typeof p !== 'object' || Array.isArray(p)) error('Cần gửi đối tượng cài đặt.');
       settings = cleanSettings(p, settings);
       if (m.phase === 'waiting') for (const side of SIDES) if (m.fighters[side]) m.fighters[side] = fighter(m.fighters[side]);
-      result = { ...settings, giftMap: { ...settings.giftMap } };
+      result = clone(settings);
       emit('settings', { settings: clone(settings) });
     } else if (method === 'mode.set') {
       if (!['live', 'demo'].includes(params.mode)) error('Chế độ phải là LIVE hoặc mô phỏng.');
@@ -407,13 +459,16 @@ export function createArena({ initial = {}, onEvent = () => {}, onSave = () => {
       s.queue = []; log('queue', 'Đã xóa hàng chờ.');
     } else if (method === 'match.start') result = beginMatch();
     else if (method === 'match.pause') {
-      if (!['countdown', 'fighting'].includes(m.phase)) error('Chỉ tạm dừng khi trận đang diễn ra.');
+      if (!['countdown', 'fighting','rest'].includes(m.phase)) error('Chỉ tạm dừng khi trận đang diễn ra.');
       m.pausedPhase = m.phase; m.pausedAt = now();
       if (m.phase === 'countdown') m.countdownMs = Math.max(0, m.deadline - now()); else m.remainingMs = Math.max(0, m.deadline - now());
       m.phase = 'paused'; emit('match', { phase: 'paused' }); log('match', 'Trận đấu đang tạm dừng.');
     } else if (method === 'match.resume') {
       if (m.phase !== 'paused') error('Trận chưa được tạm dừng.');
       const pausedDuration = Math.max(0, now() - m.pausedAt);
+      for(const p of transient.pending.values()){p.impactAt+=pausedDuration;p.startedAt+=pausedDuration;}
+      for(const f of Object.values(m.fighters)){if(f){if(f.buffUntil)f.buffUntil+=pausedDuration;if(f.guardUntil)f.guardUntil+=pausedDuration;}}
+      transient.nextAutoAt+=pausedDuration;for(const w of transient.healWindows.values())w.at+=pausedDuration;
       for (const defense of transient.defense.values()) defense.until += pausedDuration;
       for (const [uid, at] of transient.cooldowns) transient.cooldowns.set(uid, at + pausedDuration);
       for (const move of transient.attacks.values()) move.at += pausedDuration;
@@ -460,11 +515,23 @@ export function createArena({ initial = {}, onEvent = () => {}, onSave = () => {
         const a = transient.attacks.get(f.uid);
         if (a && time - a.at > 3200) f.combo = 0;
       }
-      if (time >= m.deadline) {
-        const r = m.fighters.red, b = m.fighters.blue;
-        const winner = r.hp / r.maxHp === b.hp / b.maxHp ? (r.damage === b.damage ? null : r.damage > b.damage ? 'red' : 'blue') : r.hp / r.maxHp > b.hp / b.maxHp ? 'red' : 'blue';
-        finishMatch(winner, 'time');
+      processAttacks(time);
+      if(m.phase==='fighting'&&settings.autoSparring&&time>=transient.nextAutoAt){
+        const side=transient.autoSide;transient.autoSide=opposite(side);transient.nextAutoAt=time+1800;
+        if(!transient.pending.has(side))attack(side,'jab',{auto:true});
       }
+      if (m.phase==='fighting'&&time >= m.deadline) {
+        const restMs=settings.restSeconds*1000;
+        for(const p of transient.pending.values()){p.impactAt+=restMs;p.startedAt+=restMs;}
+        m.phase='rest';m.remainingMs=restMs;m.deadline=time+restMs;
+        if(m.round<3)for(const f of Object.values(m.fighters)){f.hp=Math.min(f.maxHp,f.hp+Math.round(f.maxHp*.04));f.stamina=Math.min(100,f.stamina+35);}
+        emit('match',{phase:'rest',round:m.round,restSeconds:settings.restSeconds});log('match',`Hết hiệp ${m.round}. Nghỉ hồi sức, trận chỉ kết thúc khi có người thắng.`);dirty=true;
+      }
+    } else if(m.phase==='rest'&&time>=m.deadline){
+      m.round++;m.pressure=m.round>=5?Math.min(4,3+(m.round-5)*.25):m.round===4?2:m.round===3?1.4:1;m.healMultiplier=m.round>=5?0:m.round===4?.35:m.round===3?.65:1;m.overtime=m.round>=3;
+      m.phase='fighting';m.remainingMs=settings.roundSeconds*1000;m.deadline=time+m.remainingMs;transient.nextAutoAt=time+1800;
+      emit('match',{phase:'fighting',round:m.round,pressure:m.pressure,healMultiplier:m.healMultiplier,red:m.fighters.red?.name,blue:m.fighters.blue?.name});
+      log('match',`Hiệp ${m.round} bắt đầu${m.round>=5?' — hiệp quyết định, ngừng hồi máu và tăng áp lực':m.overtime?' — áp lực tăng, hồi máu giảm':''}!`);dirty=true;
     } else if (m.phase === 'finished' && settings.autoNext && time >= m.nextAt) {
       makeNewMatch({ keepWinner: true });
       if (s.match.fighters.red && s.match.fighters.blue) beginMatch();

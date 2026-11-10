@@ -6,8 +6,8 @@ const number = value => new Intl.NumberFormat('vi-VN').format(Number(value) || 0
 const time = value => new Date(value || Date.now()).toLocaleTimeString('vi-VN', { hour12: false });
 const initial = name => [...String(name || '?').trim()][0]?.toUpperCase() || '?';
 const safeImage = url => { try { const parsed = new URL(url); return parsed.protocol === 'https:' ? parsed.href : ''; } catch { return ''; } };
-const phaseLabels = { waiting: 'CHỜ LÊN ĐÀI', countdown: 'CHUẨN BỊ', fighting: 'ĐANG THI ĐẤU', paused: 'TẠM DỪNG', finished: 'KẾT THÚC TRẬN' };
-const moveLabels = { jab: 'Đấm thẳng', hook: 'Đấm móc', uppercut: 'Bốc cằm', kick: 'Cú đá', flurry: 'Liên hoàn', ultimate: 'Tuyệt chiêu', heal: 'Hồi máu', shield: 'Khiên phòng thủ', energy: 'Nạp năng lượng' };
+const phaseLabels = { waiting: 'CHỜ LÊN ĐÀI', countdown: 'CHUẨN BỊ', fighting: 'ĐANG THI ĐẤU', rest: 'NGHỈ GIỮA HIỆP', paused: 'TẠM DỪNG', finished: 'KẾT THÚC TRẬN' };
+const moveLabels = { jab: 'Đấm thẳng', hook: 'Đấm móc', uppercut: 'Bốc cằm', kick: 'Cú đá', flurry: 'Liên hoàn', ultimate: 'Tuyệt chiêu', heal: 'Hồi máu', shield: 'Khiên phòng thủ', energy: 'Nạp năng lượng', boost: 'Tăng sát thương' };
 const pages = {
   'tong-quan': ['Tổng quan', 'Phòng điều khiển', 'Biến mỗi bình luận thành một khoảnh khắc trên võ đài.'],
   'dieu-khien': ['Điều khiển', 'Làm chủ trận đấu', 'Từng cú đấm, từng lượt thách đấu. Tất cả trong tầm tay.'],
@@ -29,6 +29,10 @@ let lastConnectionError = '';
 let lastPeopleSignature = '';
 let lastGiftMapSignature = '';
 let lastMusicSignature = '';
+let cornerDraft = [], cornerDirty = false, cornerSaving = false, lastCornerSignature = '', lastCornerPreview = '';
+let localVoiceLoaded = false, previewVoiceStatus = null;
+const cornerActionLabels = {flurry:'Liên hoàn đấm',ultimate:'Tuyệt kỹ bão quyền',heal:'Hồi máu',boost:'Tăng sát thương',shield:'Lá chắn',jab:'Đấm thẳng',hook:'Đấm móc',uppercut:'Đấm bốc',kick:'Đá vòng'};
+const sideLabel = side => side === 'red' ? 'Góc đỏ' : 'Góc xanh';
 const logTimes = new Map();
 
 function element(tag, className, text) {
@@ -150,7 +154,7 @@ function renderState(s) {
   state = s;
   $('#modeLive').setAttribute('aria-pressed', String(s.mode === 'live'));
   $('#modeDemo').setAttribute('aria-pressed', String(s.mode === 'demo'));
-  $('#heroMode').textContent = s.mode === 'demo' ? 'DEMO ARENA' : 'LIVE ARENA';
+  $('#heroMode').textContent = s.mode === 'demo' ? 'PHÒNG THỬ' : 'LIVE THẬT';
   $('#heroMode').classList.toggle('lime-pill', s.mode === 'demo');
   $('#heroDescription').replaceChildren(document.createTextNode(s.mode === 'demo' ? 'Phòng thử đang hoạt động. Mọi diễn biến ở đây được tách khỏi dữ liệu LIVE thật.' : 'Kết nối TikTok, đón người thách đấu. Chạy Phòng thử để kiểm tra hình và tiếng trước giờ lên sóng.'));
   $('#heroMatch').textContent = `TRẬN ĐẤU #${String(s.match.number || 1).padStart(2, '0')}`;
@@ -162,7 +166,12 @@ function renderState(s) {
   $('#statPunches').textContent = number(s.stats?.punches);
   $('#statMatches').textContent = number(s.stats?.matches);
   $('#phaseBadge').textContent = $('#operatorPhase').textContent = phaseLabels[s.match.phase] || s.match.phase;
-  $('#roundLabel').textContent = `TRẬN ${String(s.match.number || 1).padStart(2, '0')}`;
+  $('#roundLabel').textContent = `TRẬN ${String(s.match.number || 1).padStart(2, '0')} · HIỆP ${s.match.round || 1}`;
+  $('#boutRound').textContent = `HIỆP ${String(s.match.round || 1).padStart(2,'0')}`;
+  const pressure = Math.max(1,Number(s.match.pressure)||1);
+  $('#boutPressure').textContent = pressure > 1 ? `ÁP LỰC TĂNG ×${pressure.toLocaleString('vi-VN',{maximumFractionDigits:2})}` : 'NHỊP ĐẤU TIÊU CHUẨN';
+  $('#boutPressure').classList.toggle('pressure-on',pressure>1);
+  $('#boutLogic').textContent = s.match.healMultiplier===0 ? 'Hiệp quyết định: hồi máu đã khóa để trận đấu có thể đi đến người thắng. Sát thương tăng theo áp lực võ đài.' : s.match.phase === 'rest' ? 'Nghỉ ngắn để hồi thể lực. Trận chưa kết thúc; hai góc sẽ tiếp tục hiệp sau.' : s.match.overtime ? 'Trận đang ở giai đoạn áp lực cao: sát thương tăng và hồi phục bị giới hạn, tiếp tục đến khi có người gục ngã.' : 'Hết đồng hồ là đổi hiệp, không xử hòa. Võ sĩ so găng chủ động; bình luận và quà giúp bạn đổi thế trận.';
   const duration = s.match.phase === 'countdown' ? s.match.countdownMs : s.match.remainingMs;
   const seconds = Math.max(0, Math.ceil((duration || 0) / 1000));
   $('#matchTimer').textContent = `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
@@ -178,12 +187,18 @@ function renderState(s) {
     $(`#${side}HpBar`).style.width = `${Math.max(0, Math.min(100, 100 * (person?.hp || 0) / (person?.maxHp || 1)))}%`;
     $(`#${side}Hp`).textContent = person ? `${number(person.hp)} / ${number(person.maxHp)} HP` : '— / — HP';
     $(`#operator${prefix}Hp`).textContent = person ? `${number(person.hp)} HP` : '— HP';
+    const effects = $(`#${side}Effects`); effects.replaceChildren();
+    if(person?.streak>0) effects.append(element('span','champion-pill',`♛ CHỦ ĐÀI · ${number(person.streak)} THẮNG`));
+    if(person?.buffRemainingMs>0) effects.append(element('span','power-pill',`TĂNG SÁT THƯƠNG ×${Number(person.powerMultiplier||1).toLocaleString('vi-VN',{maximumFractionDigits:2})} · ${Math.ceil(person.buffRemainingMs/1000)}s`));
+    if(person?.guardRemainingMs>0) effects.append(element('span','guard-pill',`BẢO VỆ · ${Math.ceil(person.guardRemainingMs/1000)}s`));
+    if(person?.comebackUsed&&!person?.guardRemainingMs) effects.append(element('span','comeback-pill','ĐÃ KÍCH HOẠT Ý CHÍ'));
     $$(`.move-grid[data-side="${side}"] button`).forEach(button => button.disabled = !person || s.match.phase !== 'fighting');
     $(`[data-heal="${side}"]`).disabled = !person;
   }
   $('#matchResult').hidden = !s.match.result;
-  $('#matchResult').textContent = s.match.result ? `${s.match.result.winner ? `${s.match.result.name || s.match.fighters?.[s.match.result.winner]?.name || 'Võ sĩ'} chiến thắng` : 'Hai võ sĩ hòa nhau'} · ${s.match.result.reason || 'Trận đấu kết thúc'}` : '';
-  $$('[data-rpc="match.pause"]').forEach(button => button.disabled = !['fighting', 'countdown'].includes(s.match.phase));
+  $('#matchResult').textContent = s.match.result ? `♛ ${s.match.result.name || s.match.fighters?.[s.match.result.winner]?.name || 'Nhà vô địch'} GIỮ ĐÀI · ${s.match.result.reason==='ko'?'HẠ ĐO VÁN':'QUYẾT ĐỊNH CỦA TRỌNG TÀI'}` : '';
+  $$('[data-finish]').forEach(button=>button.disabled=!['fighting','rest','paused','countdown'].includes(s.match.phase));
+  $$('[data-rpc="match.pause"]').forEach(button => button.disabled = !['fighting', 'rest', 'countdown'].includes(s.match.phase));
   $$('[data-rpc="match.resume"]').forEach(button => button.disabled = s.match.phase !== 'paused');
   const demo = s.mode === 'demo';
   $('#simFields').disabled = !demo;
@@ -193,6 +208,8 @@ function renderState(s) {
   $('#version').textContent = s.app?.version ? `v${s.app.version}` : 'VÕ ĐÀI LIVE';
   renderPeople(s);
   renderSettings(s.settings || {});
+  renderCornerRules(s.settings || {});
+  renderAudioStatus(s.audio || {});
   const map = s.settings?.giftMap || catalog.map || {};
   const mapSignature = JSON.stringify([map, catalog.gifts.length, catalog.actions]);
   if (mapSignature !== lastGiftMapSignature) {
@@ -225,8 +242,11 @@ function onEvent(event) {
   if (event.type === 'connection') return renderConnection(event);
   let message = event.text || event.message || '';
   if (event.type === 'hit') message = `${event.attacker || event.side} → ${event.defender || event.target}: ${moveLabels[event.move] || event.move}, −${number(event.damage)} HP${event.critical ? ' · CHÍ MẠNG' : ''}${event.dodged ? ' · NÉ THÀNH CÔNG' : ''}`;
-  else if (event.type === 'gift') message = `${event.name || 'Khán giả'} tặng ${number(event.coins)} xu${event.move ? ` → ${moveLabels[event.move] || event.move}` : ''}`;
-  else if (event.type === 'ko') message = `KẾT THÚC: ${event.name || 'Võ sĩ'} chiến thắng · ${event.reason || 'KO'}`;
+  else if (event.type === 'gift') message = `${event.name || 'Khán giả'} tặng ${number(event.coins)} xu${event.side?` → ${sideLabel(event.side)}`:''}${event.move ? ` · ${moveLabels[event.move] || event.move}` : ''}`;
+  else if(event.type==='attack.start') message=`${sideLabel(event.side)} chuẩn bị ${moveLabels[event.move]||'tuyệt chiêu'} — ra đòn sau ${((event.durationMs||0)/1000).toLocaleString('vi-VN')} giây`;
+  else if(event.type==='boost') message=`${sideLabel(event.side)} nhận tăng sát thương có thời hạn`;
+  else if(event.type==='heal') message=`${sideLabel(event.side)} hồi ${number(event.amount)} HP`;
+  else if (event.type === 'ko') message = `KẾT THÚC: ${event.name || 'Võ sĩ'} chiến thắng · ${event.reason==='ko'?'hạ đo ván':'quyết định trọng tài'}`;
   else if (event.type === 'queue') message = `${event.name || 'Người xem'} · ${event.action || 'cập nhật hàng chờ'}`;
   else if (event.type === 'match') message = `Trận đấu: ${phaseLabels[event.phase] || event.phase || event.action || 'đã cập nhật'}`;
   else if (event.type === 'defend') message = `${event.side === 'red' ? 'Góc đỏ' : 'Góc xanh'} ${event.move === 'dodge' ? 'né đòn' : 'phòng thủ'}`;
@@ -286,8 +306,9 @@ $$('[data-setting]').forEach(input => {
 });
 $$('[data-rpc]').forEach(button => button.addEventListener('click', () => run(call(button.dataset.rpc, {}, { button }))));
 $$('[data-finish]').forEach(button => button.addEventListener('click', () => {
-  const winner = button.dataset.finish === 'draw' ? null : button.dataset.finish;
-  if (!confirm(winner ? `Kết thúc trận và trao chiến thắng cho góc ${winner === 'red' ? 'đỏ' : 'xanh'}?` : 'Kết thúc trận với kết quả hòa?')) return;
+  const winner = button.dataset.finish;
+  if (!['red','blue'].includes(winner)) return;
+  if (!confirm(`Kết thúc trận theo quyết định trọng tài và trao chiến thắng cho ${sideLabel(winner).toLowerCase()}?`)) return;
   run(call('match.finish', { winner }, { button }));
 }));
 $$('[data-move]').forEach(button => button.addEventListener('click', () => run(call('fighter.attack', { side: button.closest('[data-side]').dataset.side, move: button.dataset.move }, { button }))));
@@ -341,6 +362,108 @@ $('#simGift').onclick = () => {
 };
 $('#simLike').onclick = () => run(simulate('like', { count: 10 }));
 $('#simJoin').onclick = () => run(simulate('join'));
+
+
+function rulesStatus(message,kind='') {
+  const el=$('#cornerRuleStatus');el.textContent=message;el.className=`rule-save-status ${kind}`;
+}
+function markCornerDirty(){
+  cornerDirty=true;rulesStatus('Bản nháp chưa được áp dụng. Bấm “Lưu bảng xu” để thay đổi luật trên LIVE.','dirty');
+  $('#saveCornerRules').disabled=cornerSaving;$('#revertCornerRules').disabled=cornerSaving;
+}
+function renderCornerEditor(){
+  const rows=$('#cornerRulesRows');rows.replaceChildren();
+  cornerDraft.forEach((rule,index)=>{
+    const row=element('div','coin-rule-row');row.dataset.side=rule.side;
+    const amount=document.createElement('input');amount.type='number';amount.min='1';amount.max='100000';amount.step='1';amount.required=true;amount.value=rule.coins;
+    amount.setAttribute('aria-label',`Tổng xu của quy tắc ${index+1}`);amount.dataset.coinRule='coins';
+    amount.oninput=()=>{rule.coins=Number(amount.value);markCornerDirty();};
+    const side=document.createElement('select');side.setAttribute('aria-label',`Góc nhận của quy tắc ${index+1}`);side.dataset.coinRule='side';
+    for(const [value,label]of [['red','Góc đỏ'],['blue','Góc xanh']]){const o=element('option','',label);o.value=value;side.append(o);}side.value=rule.side;
+    side.onchange=()=>{rule.side=side.value;row.dataset.side=rule.side;markCornerDirty();};
+    const action=document.createElement('select');action.setAttribute('aria-label',`Tác dụng của quy tắc ${index+1}`);action.dataset.coinRule='action';
+    for(const [value,label]of Object.entries(cornerActionLabels)){const o=element('option','',label);o.value=value;action.append(o);}action.value=rule.action;
+    action.onchange=()=>{rule.action=action.value;markCornerDirty();};
+    const remove=element('button','icon-button coin-rule-remove','×');remove.type='button';remove.setAttribute('aria-label',`Xóa quy tắc ${index+1}`);
+    remove.onclick=()=>{cornerDraft.splice(index,1);markCornerDirty();renderCornerEditor();};
+    row.append(amount,side,action,remove);rows.append(row);
+  });
+  if(!cornerDraft.length)empty(rows,'Chưa có mức xu riêng. Thêm quy tắc để khán giả hỗ trợ hai góc.','✧');
+  $('#cornerRuleCount').textContent=`${cornerDraft.length} / 32 mức xu`;
+  $('#addCornerRule').disabled=cornerSaving||cornerDraft.length>=32;
+}
+function renderCornerPreview(rules){
+  const signature=JSON.stringify([rules,state?.mode]);if(signature===lastCornerPreview)return;lastCornerPreview=signature;
+  const preview=$('#overviewCornerRules'),demo=$('#cornerDemoButtons');preview.replaceChildren();demo.replaceChildren();
+  for(const side of ['red','blue']){
+    const group=element('div',`corner-rule-group ${side}`),head=element('div','corner-rule-group-title');
+    head.append(element('i'),element('strong','',sideLabel(side)));group.append(head);
+    const sideRules=rules.filter(r=>r.side===side);
+    if(!sideRules.length)group.append(element('p','hint','Chưa gán mức xu cho góc này.'));
+    sideRules.forEach(rule=>{const item=element('div','corner-rule-item');item.append(element('b','',`${number(rule.coins)} xu`),element('span','',cornerActionLabels[rule.action]||rule.action));group.append(item);});
+    preview.append(group);
+    const demoGroup=element('div',`corner-demo-group ${side}`);demoGroup.append(element('strong','',sideLabel(side)));
+    sideRules.forEach(rule=>{const button=element('button','button secondary small',`${number(rule.coins)} xu · ${cornerActionLabels[rule.action]||rule.action}`);button.type='button';button.dataset.cornerDemo=side;button.dataset.coins=rule.coins;
+      button.onclick=()=>{
+        if(state?.mode!=='demo'){toast('Chuyển sang Phòng thử trước khi tặng quà mẫu.',true);return;}
+        run(call('sim.gift',{uid:'sim_khan_gia_ngoai_dai',name:'Khán giả ngoài đài',coins:Number(rule.coins),giftName:'Quà thử theo góc',eventId:`sim_corner_${crypto.randomUUID?.()||Date.now()}`},{button,success:`Đã gửi ${number(rule.coins)} xu từ khách ngoài đài cho ${sideLabel(side).toLowerCase()}.`}));
+      };demoGroup.append(button);});demo.append(demoGroup);
+  }
+}
+function renderCornerRules(settings){
+  const rules=Array.isArray(settings.cornerGifts)?settings.cornerGifts:[];
+  renderCornerPreview(rules);
+  const signature=JSON.stringify(rules);
+  if(!cornerDirty&&!cornerSaving&&signature!==lastCornerSignature){
+    lastCornerSignature=signature;cornerDraft=rules.map(r=>({coins:r.coins,side:r.side,action:r.action}));renderCornerEditor();rulesStatus('Bảng xu đã lưu đang được áp dụng trên võ đài.','saved');
+  }
+}
+$('#addCornerRule').onclick=()=>{
+  if(cornerDraft.length>=32)return;
+  let next=1;const used=new Set(cornerDraft.map(r=>Number(r.coins)));while(used.has(next))next++;
+  cornerDraft.push({coins:next,side:'red',action:'flurry'});markCornerDirty();renderCornerEditor();
+};
+$('#revertCornerRules').onclick=()=>{
+  cornerDirty=false;cornerDraft=(state?.settings?.cornerGifts||[]).map(r=>({...r}));lastCornerSignature=JSON.stringify(cornerDraft);renderCornerEditor();rulesStatus('Đã bỏ bản nháp, khôi phục bảng xu đang chạy.','saved');
+};
+$('#cornerRulesForm').onsubmit=event=>{
+  event.preventDefault();if(cornerSaving)return;
+  const seen=new Set();
+  for(const r of cornerDraft){
+    if(!Number.isInteger(Number(r.coins))||Number(r.coins)<1||Number(r.coins)>100000){rulesStatus('Mức xu phải là số nguyên từ 1 đến 100.000. Bảng đang chạy không thay đổi.','error');return;}
+    if(seen.has(Number(r.coins))){rulesStatus(`Mức ${number(r.coins)} xu bị trùng. Mỗi mức chỉ được thuộc một góc và một tác dụng; bảng đang chạy chưa thay đổi.`,'error');return;}
+    seen.add(Number(r.coins));
+  }
+  cornerSaving=true;const draft=cornerDraft.map(r=>({coins:Number(r.coins),side:r.side,action:r.action}));rulesStatus('Đang lưu và kiểm tra bảng xu…');
+  run(call('settings.set',{settings:{cornerGifts:draft}},{button:$('#saveCornerRules')}).then(result=>{
+    cornerDirty=false;const rules=result?.cornerGifts||result?.settings?.cornerGifts||draft;
+    cornerDraft=rules.map(r=>({...r}));lastCornerSignature=JSON.stringify(rules);renderCornerEditor();rulesStatus('Đã lưu. Các mức xu này đang được áp dụng cho hai góc.','saved');toast('Đã áp dụng bảng xu hai góc.');
+  }).catch(error=>{cornerDirty=true;rulesStatus(`${error.message} Bản nháp được giữ để bạn sửa; luật đang chạy không thay đổi.`,'error');}).finally(()=>{cornerSaving=false;$('#saveCornerRules').disabled=false;$('#revertCornerRules').disabled=false;$('#addCornerRule').disabled=cornerDraft.length>=32;}));
+};
+$('#applyRecommendedRules').onclick=()=>{if(!confirm('Áp dụng bộ luật đề xuất? Các thông số được lưu cho trận mới, không reset buổi hoặc xóa bảng xếp hạng.'))return;run(call('settings.set',{settings:{maxHp:1600,giftDamageCap:180,roundSeconds:120,restSeconds:8,autoSparring:true,commentCooldownMs:1000,holdWinnerSeconds:8}},{button:$('#applyRecommendedRules'),success:'Đã lưu nhịp đấu đề xuất. Bắt đầu trận mới để dùng cùng bộ luật.'}));};
+function renderAudioStatus(audio={}){
+  const voices=globalThis.speechSynthesis?.getVoices?.()||[],hasVi=voices.some(v=>/^vi(?:-|_|$)/i.test(v.lang||''));
+  const box=$('#mcDiagnostics'),title=$('#mcDiagnosticTitle'),note=$('#mcDiagnosticText');
+  const offline=audio.offline===true,fallback=audio.fallback===true||offline;
+  if(previewVoiceStatus?.mode==='unavailable'){box.classList.add('voice-warning');title.textContent='Nguồn xem trước chưa có giọng Việt khả dụng';note.textContent=previewVoiceStatus.warning||'Giữ phụ đề tiếng Việt; không chọn giọng tiếng Anh thay thế. Kiểm tra Internet hoặc cài giọng Việt trên máy.';return;}
+  if(previewVoiceStatus?.mode==='cloud'){box.classList.remove('voice-warning');title.textContent='Nguồn xem trước đang dùng Nam Minh tiếng Việt';note.textContent='Đã phát giọng tổng hợp tiếng Việt trong preview. Nếu OBS phát riêng, vẫn cần mở tiếng và kiểm tra nguồn đó.';return;}
+  box.classList.toggle('voice-warning',fallback&&!hasVi);
+  if(fallback&&!hasVi){
+    title.textContent='Chưa có giọng Việt dự phòng trên trình duyệt này';
+    note.textContent=`${audio.error?audio.error+' ':''}${offline?'Máy chủ đang ngoại tuyến. ':''}${localVoiceLoaded?'Không phát giọng hệ thống khác ngôn ngữ. ':'Đang chờ danh sách giọng của hệ thống. '}MC chỉ hiện chữ khi không tìm được giọng Việt. Kết nối Internet cho Nam Minh hoặc cài giọng Việt trên máy phát.`;
+  }else if(fallback){
+    title.textContent='Dự phòng tiếng Việt · không chuyển sang giọng Anh';
+    note.textContent=`${audio.error?audio.error+' ':''}Trình duyệt này có giọng Việt. Mở tiếng trên overlay; nguồn OBS có thể có danh sách giọng khác, hãy kiểm tra trực tiếp tại nguồn.`;
+  }else{
+    title.textContent=audio.busy?'Nam Minh đang bình luận tiếng Việt':'Nam Minh · bình luận tiếng Việt';
+    note.textContent=`Giọng đám mây được cố định tiếng Việt.${audio.queued?` ${number(audio.queued)} câu đang chờ.`:''} Nếu dịch vụ gián đoạn, chỉ giọng Việt được phép dự phòng; không có giọng phù hợp thì hiện chữ.`;
+  }
+}
+addEventListener('message',event=>{if(event.origin!==location.origin||event.source!==$('#overlayPreview').contentWindow||event.data?.type!=='arena.voice-status')return;previewVoiceStatus=event.data;renderAudioStatus(state?.audio||{});});
+if(globalThis.speechSynthesis){
+  globalThis.speechSynthesis.addEventListener?.('voiceschanged',()=>{localVoiceLoaded=true;if(state)renderAudioStatus(state.audio||{});});
+  setTimeout(()=>{localVoiceLoaded=true;if(state)renderAudioStatus(state.audio||{});},1800);
+}
 
 async function loadCatalog() {
   if (catalogLoading) return;

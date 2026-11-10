@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { createGiftAggregator, normalizeTikTokUser, createTikTok } from '../src/tiktok.mjs';
+import { createArena } from '../src/arena.mjs';
 
 function clock() {
   let time = 1000, seq = 0;
@@ -20,10 +21,13 @@ test('streak timeout followed by a late final only charges incremental count', (
   g.ingest({ ...packet, repeatCount: 3, msgId: 'a' });
   assert.equal(events.length, 0);
   c.flush(); assert.equal(events.length, 1); assert.equal(events[0].coins, 3);
+  assert.equal(events[0].isStreakCorrection, false); assert.equal(events[0].streakCoins, 3);
   g.ingest({ ...packet, repeatCount: 3, repeatEnd: 1, msgId: 'b' });
   assert.equal(events.length, 1, 'late end does not charge the first three gifts again');
   g.ingest({ ...packet, repeatCount: 5, repeatEnd: 1, msgId: 'c' });
   assert.equal(events.length, 2); assert.equal(events[1].coins, 2);
+  assert.equal(events[1].isStreakCorrection, true); assert.equal(events[1].streakCoins, 5);
+  assert.equal(events[1].supportGroupId, events[0].supportGroupId);
   assert.notEqual(events[0].eventId, events[1].eventId);
   g.ingest({ ...packet, repeatCount: 5, repeatEnd: 1, msgId: 'c' });
   assert.equal(events.length, 2, 'identical packet replay is ignored');
@@ -117,4 +121,69 @@ test('optional signing key is redacted from operational errors', async () => {
     await adapter.connect('boxer'); assert.equal(adapter.status().status, 'error');
     assert(!JSON.stringify(adapter.status()).includes(key)); assert(!logs.join('\n').includes(key));
   } finally { await adapter.disconnect(); }
+});
+
+
+test('late combo total carries accounting-only correction instead of a new corner amount', () => {
+  const c = clock(), events = [];
+  const g = createGiftAggregator({ ...c, emit: (_kind, payload) => events.push(payload) });
+  g.ingest({ ...packet, repeatCount: 5, msgId: 'first-five' });
+  c.flush();
+  g.ingest({ ...packet, repeatCount: 11, repeatEnd: true, msgId: 'late-eleven' });
+  assert.equal(events.length, 2);
+  assert.deepEqual(events.map(p => p.coins), [5, 6]);
+  assert.deepEqual(events.map(p => p.streakCoins), [5, 11]);
+  assert.deepEqual(events.map(p => p.isStreakCorrection), [false, true]);
+  assert.equal(events[0].supportGroupId, events[1].supportGroupId);
+  assert.equal(events.reduce((sum, p) => sum + p.coins, 0), 11, 'actual credit must remain eleven coins');
+  g.ingest({ ...packet, repeatCount: 11, repeatEnd: true, msgId: 'late-eleven-new-packet' });
+  assert.equal(events.length, 2, 'same total does not generate another support or accounting event');
+  g.close();
+});
+
+test('normal completed combo routes its full total once and independent gifts get independent groups', () => {
+  const events = [], g = createGiftAggregator({ emit: (_kind, payload) => events.push(payload) });
+  g.ingest({ ...packet, repeatCount: 30, repeatEnd: true, msgId: 'thirty' });
+  g.ingest({ ...packet, groupId: 'other-group', repeatCount: 6, repeatEnd: true, msgId: 'six' });
+  assert.deepEqual(events.map(p => p.coins), [30, 6]);
+  assert.deepEqual(events.map(p => p.isStreakCorrection), [false, false]);
+  assert.notEqual(events[0].supportGroupId, events[1].supportGroupId);
+  g.close();
+});
+
+test('unknown-priced streak is not marked charged and can be credited after its price arrives', () => {
+  const events = [], g = createGiftAggregator({ emit: (_kind, payload) => events.push(payload) });
+  const noPrice = { ...packet, giftDetails: { name: 'Quà mới', giftType: 1 } };
+  g.ingest({ ...noPrice, repeatCount: 3, repeatEnd: true, msgId: 'without-price' });
+  assert.equal(events.length, 0);
+  g.ingest({ ...noPrice, diamondCount: 5, repeatCount: 3, repeatEnd: true, msgId: 'with-price' });
+  assert.equal(events.length, 1);
+  assert.equal(events[0].coins, 15);
+  assert.equal(events[0].streakCoins, 15);
+  assert.equal(events[0].isStreakCorrection, false);
+  g.close();
+});
+
+
+test('adapter late correction cannot activate the opposite corner rule in the arena', () => {
+  const c = clock(), combat = [];
+  const arena = createArena({ now: c.now, random: () => 0.5,
+    initial: { settings: { countdownSeconds: 0, autoSparring: false, autoNext: false } },
+    onEvent: event => combat.push(event) });
+  arena.command('queue.add', { uid: 'fighter-red', name: 'Góc đỏ' });
+  arena.command('queue.add', { uid: 'fighter-blue', name: 'Góc xanh' });
+  arena.command('match.start');
+  const g = createGiftAggregator({ ...c, emit: (kind, payload) => arena.ingest(kind, payload) });
+  g.ingest({ ...packet, repeatCount: 5, msgId: 'timeout-red-five' }); c.flush();
+  assert.equal(combat.filter(e => e.type === 'attack.start').length, 1);
+  assert.equal(combat.find(e => e.type === 'attack.start').side, 'red');
+  g.ingest({ ...packet, repeatCount: 11, repeatEnd: true, msgId: 'late-six-extra' });
+  assert.equal(arena.snapshot().stats.coins, 11);
+  assert.equal(arena.snapshot().queue.length, 0);
+  assert.equal(combat.filter(e => e.type === 'attack.start').length, 1, 'six additional coins are reconciliation, not a blue combo');
+  c.advance(1400); arena.tick();
+  const fighters = arena.snapshot().match.fighters;
+  assert.equal(fighters.red.hp, fighters.red.maxHp);
+  assert.ok(fighters.blue.hp < fighters.blue.maxHp);
+  g.close();
 });

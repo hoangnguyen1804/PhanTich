@@ -1,8 +1,14 @@
-# VÕ ĐÀI LIVE · Boxing Arena
+# VÕ ĐÀI LIVE 1.1 · Đấu trường quyền anh
 
-Game boxing arcade tương tác cho TikTok LIVE, kèm bảng điều khiển tiếng Việt và overlay dọc cho OBS/TikTok LIVE Studio. Hai người xem lên đài, dùng bình luận để đấm/móc/né/đỡ; quà kích hoạt combo, tiếp sức hoặc đăng ký thách đấu. Người thắng giữ đài, người trong hàng chờ lên tiếp.
+Game boxing arcade tương tác cho TikTok LIVE, kèm bảng điều khiển tiếng Việt và overlay dọc cho OBS/TikTok LIVE Studio. Hai người xem lên đài; bình luận để ra đòn, khán giả tặng đúng mức xu để tiếp sức trực tiếp cho góc đỏ hoặc xanh. Bản 1.1 có võ sĩ minh họa 2D theo tỷ lệ cơ thể người, chuỗi liên hoàn/tuyệt kỹ nhiều bước, danh hiệu trên đầu nhà vô địch và luật nhiều hiệp chỉ kết thúc khi phân thắng bại. Đây là đồ họa SVG hoạt họa, không phải người thật hoặc mô hình 3D quang thực.
 
 **Không có key bản quyền, kích hoạt máy hoặc máy chủ cấp phép.** Mã điều khiển nội bộ được tự tạo để bảo vệ thao tác trên máy, không phải giấy phép. TikTok và Microsoft TTS vẫn là dịch vụ bên ngoài; kết nối thật phụ thuộc trạng thái LIVE, mạng và giới hạn nhà cung cấp.
+
+## Giao diện bản 1.1
+
+<img src="docs/images/arena-1.1.png" width="420" alt="Võ sĩ và danh hiệu nhà vô địch bản 1.1">
+
+[Ảnh bảng điều khiển và quy tắc xu](docs/images/control-1.1.png) · [Kết quả kiểm thử](docs/KIEM-THU.md)
 
 ## Chạy nhanh
 
@@ -38,14 +44,35 @@ $env:ARENA_OFFLINE = '1'
 npm start
 ```
 
-Chế độ này không kết nối TikTok hay tạo giọng Microsoft qua mạng. Chữ MC và hiệu ứng vẫn dùng được; giọng trình duyệt dự phòng phụ thuộc voice có sẵn trên máy. Xóa biến này khi cần kết nối LIVE thật.
+Chế độ này không kết nối TikTok hay tạo giọng Microsoft qua mạng. Chữ MC và hiệu ứng vẫn dùng được. Dự phòng chỉ phát khi có giọng tiếng Việt trên máy; nếu không có, overlay giữ phụ đề và báo rõ, không tự chọn giọng Anh. Xóa biến này khi cần kết nối LIVE thật.
+
+## Tặng đúng xu để hỗ trợ đúng góc
+
+Khi đủ hai võ sĩ, **mọi người xem đều có thể tiếp sức bằng đúng tổng xu của một lượt quà**, không cần lên đài hoặc bình luận chọn bên trước. Bảng mặc định:
+
+| Tác dụng | Góc đỏ | Góc xanh |
+|---|---:|---:|
+| Liên hoàn đấm | 5 xu | 6 xu |
+| Tuyệt kỹ bão quyền | 30 xu | 50 xu |
+| Hồi máu có giới hạn | 10 xu | 20 xu |
+| Tăng sát thương ×1,3 trong 12 giây | 99 xu | 100 xu |
+
+Bảng này được ưu tiên hơn người tặng đang đứng góc nào, góc đã bình luận và mapping ID quà. Ví dụ võ sĩ đỏ tặng 6 xu vẫn hỗ trợ góc xanh. Vào **Quà & luật → Mức xu dành riêng cho hai góc** để sửa; mỗi mức xu chỉ được gán một góc/một tác dụng. Dùng các nút **Khách ngoài đài** trong Phòng thử để thử đúng luồng khán giả.
+
+Mức xu là tổng của một lượt quà đã chốt, không phải tổng xu tích lũy cả buổi. Quà chuỗi chốt muộn sau timeout chỉ bổ sung thống kê; không kích hoạt thêm một đòn hoặc chuyển nhầm góc. Quà không khớp bảng vẫn dùng luật quà thông thường/hàng chờ; xem hướng dẫn để biết thứ tự.
+
+## Trận nhiều hiệp, không có hòa
+
+Mặc định 1.600 HP, mỗi hiệp 120 giây, nghỉ 8 giây. Hết hiệp không tính thắng thua bằng điểm. Bình thường một bên về 0 HP mới kết thúc; trọng tài có thể chỉ định rõ đỏ hoặc xanh thắng, không có lựa chọn hòa. Võ sĩ có nhịp đấm tự động nhẹ để trận không đứng yên, còn bình luận, thể lực, phòng thủ và quà thay đổi diễn biến.
+
+Người ít máu có một cơ hội giáp phản công; hồi máu bị giới hạn theo thời gian. Từ hiệp 3 áp lực tăng, hồi máu giảm; từ hiệp 5 ngừng hồi máu để tránh bế tắc. Người thắng giữ đúng góc cũ, mang danh hiệu lớn và chuỗi thắng sang người thách đấu tiếp theo.
 
 ## Lệnh người xem
 
 | Bình luận | Tác dụng |
 |---|---|
 | `lên đài` | Vào hàng chờ nếu đã đủ điều kiện xu; miễn phí khi phí vào đài = 0 |
-| `đỏ` / `xanh` | Chọn góc để quà cổ vũ tác động vào võ sĩ tương ứng |
+| `đỏ` / `xanh` | Chọn góc cho quà không khớp bảng xu riêng; bảng xu riêng luôn được ưu tiên |
 | `đấm` / `jab` | Đấm thẳng |
 | `móc` / `đấm móc` | Đấm móc |
 | `đấm bốc` / `uppercut` | Móc ngược |
@@ -55,7 +82,7 @@ Chế độ này không kết nối TikTok hay tạo giọng Microsoft qua mạn
 | `liên hoàn` / `combo` | Combo tốn nhiều thể lực |
 | `bão quyền` / `ultimate` | Tuyệt kỹ, cần đủ 100 năng lượng |
 
-Chỉ hai võ sĩ đang thi đấu được ra đòn bằng comment. Có hồi đòn và thể lực để chống spam. Người ngoài đài có thể tặng quà để vào hàng chờ; nếu đã chọn đỏ/xanh, quà dùng để cổ vũ góc đó. Xem [hướng dẫn đầy đủ](docs/HUONG-DAN.md) để biết điểm xu, hàng chờ và vận hành buổi LIVE.
+Chỉ hai võ sĩ đang thi đấu được ra đòn bằng comment. Có hồi đòn và thể lực để chống spam. Người ngoài đài tặng đúng bảng xu sẽ hỗ trợ trực tiếp khi đủ hai võ sĩ; khi chưa đủ người hoặc quà không khớp/chưa chọn góc, quà có thể dùng để vào hàng chờ. Xem [hướng dẫn đầy đủ](docs/HUONG-DAN.md) để biết điểm xu, hàng chờ và vận hành buổi LIVE.
 
 ## OBS / LIVE Studio
 
@@ -73,15 +100,15 @@ npm run check
 npm run package
 ```
 
-Gói nguồn được tạo trong `dist/VoDaiLive-1.0.0-Source.zip`. Để tạo bản Windows portable có dependencies và runtime:
+Gói nguồn được tạo trong `dist/VoDaiLive-1.1.0-Source.zip`. Để tạo bản Windows portable có dependencies và runtime:
 
 ```sh
 npm run package -- --runtime /duong/dan/node.exe
 ```
 
-Kết quả `dist/VoDaiLive-1.0.0-Windows-Portable.zip` và tệp SHA-256. Truyền runtime Node Windows x64 ≥22 từ nguồn tin cậy. Script không tải hoặc xác minh nhà phát hành runtime thay bạn; không dùng executable không rõ nguồn.
+Kết quả `dist/VoDaiLive-1.1.0-Windows-Portable.zip` và tệp SHA-256. Truyền runtime Node Windows x64 ≥22 từ nguồn tin cậy. Script không tải hoặc xác minh nhà phát hành runtime thay bạn; không dùng executable không rõ nguồn.
 
-Gói phát hành không kèm `data/`, nhạc cá nhân hay hồ sơ trình duyệt. Khi cập nhật thủ công, tắt ứng dụng, sao lưu và giữ **`data/` + `nhac/`**, thay mã chương trình, cài dependencies theo lockfile nếu cần rồi chạy lại. Không có updater gắn máy chủ thương mại của bản mẫu.
+Gói phát hành không kèm `data/`, nhạc cá nhân hay hồ sơ trình duyệt. Nâng từ 1.0 giữ lại cài đặt đã lưu; bấm **Áp dụng luật đề xuất** trong Quà & luật nếu muốn dùng bộ thông số mới cho trận tiếp theo. Khi cập nhật thủ công, tắt ứng dụng, sao lưu và giữ **`data/` + `nhac/`**, thay mã chương trình, cài dependencies theo lockfile nếu cần rồi chạy lại. Không có updater gắn máy chủ thương mại của bản mẫu.
 
 ## Tài liệu
 

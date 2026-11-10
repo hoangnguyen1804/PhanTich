@@ -1,3 +1,5 @@
+> Historical 1.0 development contract. For current 1.1 behavior use KIEN-TRUC.md and UPGRADE-1.1-CONTRACT.md.
+
 # Võ Đài LIVE — shared implementation contract
 
 Product: original boxing live arena inspired by supplied ThapSang layered architecture. No product license, activation key, vn-tool dependency or original private data. Node ES modules, vanilla browser modules, `ws`, TikTok connector, msedge TTS. Vietnamese interface. Repo /workspace/PhanTich.

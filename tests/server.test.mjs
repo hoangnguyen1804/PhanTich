@@ -94,4 +94,30 @@ test('full server: auth, RPC, arena, isolated demo, LAN, music, WebSocket, persi
   const out=await fetch(base+'/download/state',{headers:{Authorization:headers.Authorization}});assert.equal(out.status,200);const data=await out.text();assert.ok(!data.includes(config.rpcToken));
   await stop();output='';launch();base=await ready();assert.equal((await call('state.get')).stats.coins,2);
  });
+ await t.test('1.1 exact coin routing ignores donor identity and selected corner; delayed impacts',async()=>{
+  await call('mode.set',{mode:'live'});await call('session.reset');
+  await call('settings.set',{settings:{autoSparring:false,countdownSeconds:0,mcEnabled:false,autoNext:false}});
+  await call('queue.add',{uid:'fighter-red',name:'Võ sĩ Đỏ'});await call('queue.add',{uid:'fighter-blue',name:'Võ sĩ Xanh'});await call('match.start');
+  const s=await call('state.get');assert.equal(s.match.phase,'fighting');assert.equal(s.giftMenu.length,8);assert.ok(s.giftMenu.every(x=>x.side==='red'||x.side==='blue'));
+  await call('event.chat',{uid:'spectator',name:'Khán giả',text:'xanh'});
+  const ws=new WebSocket(base.replace('http','ws')+'/ws');const events=[];ws.on('message',b=>{events.push(JSON.parse(b));});await new Promise((resolve,reject)=>{ws.once('open',resolve);ws.once('error',reject);});
+  const r=await call('event.gift',{uid:'spectator',name:'Khán giả',coins:5,eventId:'route-red'});assert.equal(r.side,'red');assert.equal(r.move,'flurry');
+  assert.equal((await call('state.get')).match.fighters.blue.hp,s.match.fighters.blue.hp);
+  await delay(1900);const after=await call('state.get');assert.ok(after.match.fighters.blue.hp<s.match.fighters.blue.hp);assert.equal(after.queue.length,0);
+  const start=events.findIndex(e=>e.type==='attack.start'&&e.side==='red'),hit=events.findIndex(e=>e.type==='hit'&&e.side==='red');assert.ok(start>=0&&hit>start);assert.equal(events[hit].sequenceId,events[start].sequenceId);
+  const b=await call('event.gift',{uid:'fighter-red',name:'Võ sĩ Đỏ',coins:6,eventId:'route-blue'});assert.equal(b.side,'blue');await delay(1900);assert.ok((await call('state.get')).match.fighters.red.hp<s.match.fighters.red.hp);ws.close();
+ });
+ await t.test('1.1 duplicate corner prices rejected atomically; draw rejected; boosts and heals bounded',async()=>{
+  const initial=(await call('state.get')).settings.cornerGifts;
+  const bad=await rpc('settings.set',{settings:{cornerGifts:[{coins:5,side:'red',action:'flurry'},{coins:5,side:'blue',action:'heal'}]}});assert.ok(bad.error);assert.deepEqual((await call('state.get')).settings.cornerGifts,initial);
+  assert.ok((await rpc('match.finish',{winner:null})).error);
+  await call('event.gift',{uid:'spectator',name:'Khán giả',coins:99,eventId:'power-red'});let s=await call('state.get');assert.ok(s.match.fighters.red.powerMultiplier>1);
+  const hp=s.match.fighters.blue.hp;await call('event.gift',{uid:'spectator',name:'Khán giả',coins:20,eventId:'heal-blue'});s=await call('state.get');assert.ok(s.match.fighters.blue.hp>=hp&&s.match.fighters.blue.hp<=s.match.fighters.blue.maxHp);
+ });
+ await t.test('1.1 late streak correction is accounting-only and cannot target opposite corner',async()=>{
+  const before=await call('state.get');const r=await call('event.gift',{uid:'spectator',name:'Khán giả',coins:6,streakCoins:11,isStreakCorrection:true,eventId:'late-streak'});const after=await call('state.get');
+  assert.equal(after.stats.coins,before.stats.coins+6);assert.equal(after.match.fighters.red.hp,before.match.fighters.red.hp);assert.equal(after.match.fighters.blue.hp,before.match.fighters.blue.hp);
+  await delay(1900);assert.equal((await call('state.get')).match.fighters.red.hp,before.match.fighters.red.hp);
+ });
+
 });

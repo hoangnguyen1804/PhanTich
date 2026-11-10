@@ -5,8 +5,12 @@ const cleanText = value => String(value ?? '').replace(/[\u0000-\u001f]/g, ' ').
 const textKey = value => cleanText(value).toLocaleLowerCase('vi');
 const PRIORITY = { low: 10, normal: 30, high: 70, urgent: 90, ko: 95 };
 
-export function createSound({ onCaption = () => {}, onReady = () => {} } = {}) {
-  let unlocked = false, muted = false, closed = false, lastCaption = '';
+export const isVietnameseVoice = voice => /^vi(?:[-_]|$)/i.test(String(voice?.lang || '').trim());
+
+export function createSound({ onCaption = () => {}, onReady = () => {}, onVoiceStatus = () => {}, voiceWaitMs = 1200 } = {}) {
+  let unlocked = false, muted = false, closed = false, lastCaption = '', cancelVoiceWait = null;
+  let voiceStatus = { mode: 'idle', voice: '', language: 'vi-VN', warning: '' };
+  function updateVoiceStatus(mode, voice = '', warning = '') { voiceStatus = { mode, voice, language: 'vi-VN', warning }; try { onVoiceStatus({ ...voiceStatus }); } catch {} }
   let context = null, master = null, noiseBuffer = null;
   let opts = { mcEnabled: true, mcVolume: 80, mcRate: 15, musicEnabled: false, musicVolume: 25, sfxVolume: 70 };
   let music = null, voice = null, voiceActive = false, currentCancel = null, speechGeneration = 0;
@@ -15,7 +19,7 @@ export function createSound({ onCaption = () => {}, onReady = () => {} } = {}) {
   const canPlay = () => unlocked && !muted && !closed;
   const isManual = item => item?.manual === true || item?.tag === 'manual';
   const canSpeak = item => canPlay() && (opts.mcEnabled || isManual(item));
-  const caption = (text, details = {}) => { const cleaned = cleanText(text); if (cleaned) lastCaption = cleaned; try { onCaption(cleaned, details); } catch {} };
+  const caption = (text, details = {}) => { const cleaned = cleanText(text); if (cleaned) lastCaption = cleaned; try { onCaption(cleaned, { warning: voiceStatus.warning, ...details }); } catch {} };
   const later = (fn, ms) => {
     const id = setTimeout(() => { timers.delete(id); if (!closed) fn(); }, ms);
     timers.add(id); return id;
@@ -50,6 +54,7 @@ export function createSound({ onCaption = () => {}, onReady = () => {} } = {}) {
   }
   function clearSpeech() {
     speechGeneration++;
+    cancelVoiceWait?.();
     queue.length = 0;
     for (const item of pending.values()) cancelTimer(item.timer);
     pending.clear(); stopVoice();
@@ -114,7 +119,11 @@ export function createSound({ onCaption = () => {}, onReady = () => {} } = {}) {
   function sfx(event) {
     if (!canPlay() || opts.sfxVolume <= 0) return;
     try {
-      if (event.type === 'hit') {
+      if (event.type === 'attack.start') {
+        const duration = bounded(event.durationMs, 300, 3000, 1400) / 1000;
+        tone(event.move === 'ultimate' ? 90 : 160, duration * .7, .12, 'sine', 0, event.move === 'ultimate' ? 420 : 280);
+        noise(.12, .1, 4200, Math.max(0, duration - .22));
+      } else if (event.type === 'hit') {
         if (event.dodged) { noise(0.16, 0.12, 3700); return; }
         if (event.blocked) { noise(0.08, 0.16, 1800); tone(240, 0.09, 0.16, 'triangle', 0, 70); return; }
         const heavy = ['uppercut', 'kick', 'ultimate'].includes(event.move) || event.critical;
@@ -134,19 +143,64 @@ export function createSound({ onCaption = () => {}, onReady = () => {} } = {}) {
       else if (event.type === 'gift') { tone(660, 0.16, 0.05, 'sine'); tone(990, 0.25, 0.06, 'sine', 0.08); }
     } catch { /* Visual combat continues if the audio device disappears. */ }
   }
-  function browserSpeech(item) {
+  function vietnameseVoice() {
+    let voices = [];
+    try { voices = globalThis.speechSynthesis?.getVoices?.() || []; } catch {}
+    const candidates = voices.filter(isVietnameseVoice);
+    return candidates.find(v => /nam.?minh/i.test(v.name || '')) || candidates[0] || null;
+  }
+  function waitForVietnameseVoice(generation) {
+    const ready = vietnameseVoice();
+    if (ready) return Promise.resolve(ready);
     return new Promise(resolve => {
-      if (!canSpeak(item) || !globalThis.speechSynthesis || typeof SpeechSynthesisUtterance !== 'function') { resolve(); return; }
+      const synth = globalThis.speechSynthesis;
+      let finished = false, timeout, poll, previous;
+      const finish = voice => {
+        if (finished) return; finished = true;
+        cancelTimer(timeout); clearInterval(poll);
+        if (synth?.removeEventListener) synth.removeEventListener('voiceschanged', check);
+        else if (synth && synth.onvoiceschanged === changed) synth.onvoiceschanged = previous;
+        if (cancelVoiceWait === cancel) cancelVoiceWait = null;
+        resolve(voice);
+      };
+      const check = () => {
+        if (!canSpeak({ manual: true }) || generation !== speechGeneration) return finish(null);
+        const voice = vietnameseVoice(); if (voice) finish(voice);
+      };
+      const changed = event => { try { previous?.call(synth, event); } catch {} check(); };
+      const cancel = () => finish(null);
+      cancelVoiceWait = cancel;
+      if (synth?.addEventListener) synth.addEventListener('voiceschanged', check);
+      else if (synth) { previous = synth.onvoiceschanged; synth.onvoiceschanged = changed; }
+      timeout = later(() => finish(vietnameseVoice()), bounded(voiceWaitMs, 0, 3000, 1200));
+      poll = setInterval(check, 100);
+      check();
+    });
+  }
+  async function browserSpeech(item) {
+    if (!canSpeak(item)) return;
+    const generation = speechGeneration;
+    const hasApi = globalThis.speechSynthesis && typeof SpeechSynthesisUtterance === 'function';
+    const vietnamese = hasApi ? await waitForVietnameseVoice(generation) : null;
+    if (generation !== speechGeneration || !canSpeak(item)) return;
+    if (!vietnamese) {
+      const warning = 'Chưa có giọng tiếng Việt trên máy. MC đang hiện chữ; bật Internet để dùng giọng Nam Minh hoặc cài giọng tiếng Việt trong Windows.';
+      updateVoiceStatus('unavailable', '', warning);
+      caption(item.text, { speaking: false, source: 'voice-unavailable', status: 'no-vietnamese-voice', warning });
+      return;
+    }
+    // Never let the OS select an English/default voice, even if lang is set to vi-VN.
+    return new Promise(resolve => {
       const utterance = new SpeechSynthesisUtterance(item.text);
-      const voices = globalThis.speechSynthesis.getVoices();
-      const vietnamese = voices.find(v => /^vi(?:-|_)/i.test(v.lang));
-      if (vietnamese) utterance.voice = vietnamese;
-      utterance.lang = 'vi-VN'; utterance.rate = bounded(1 + opts.mcRate / 100, 0.5, 1.6, 1.15); utterance.volume = opts.mcVolume / 100;
+      utterance.voice = vietnamese;
+      utterance.lang = 'vi-VN'; utterance.rate = bounded(1 + opts.mcRate / 100, 0.7, 1.45, 1.15); utterance.volume = opts.mcVolume / 100;
+      updateVoiceStatus('vietnamese', vietnamese.name || 'Giọng tiếng Việt');
       let settled = false;
       const done = () => { if (settled) return; settled = true; cancelTimer(timeout); currentCancel = null; resolve(); };
       const timeout = later(() => { try { globalThis.speechSynthesis.cancel(); } catch {} done(); }, 28_000);
       currentCancel = () => { try { globalThis.speechSynthesis.cancel(); } catch {} done(); };
-      utterance.onend = done; utterance.onerror = done;
+      utterance.onend = done;
+      utterance.onerror = () => { updateVoiceStatus('unavailable', '', 'Giọng tiếng Việt trên máy chưa phát được. MC vẫn hiển thị chữ.'); done(); };
       caption(item.text, { speaking: true, source: 'speech' });
       try { globalThis.speechSynthesis.speak(utterance); } catch { done(); }
     });
@@ -169,7 +223,7 @@ export function createSound({ onCaption = () => {}, onReady = () => {} } = {}) {
       voice.onended = finish; voice.onerror = fallback;
       currentCancel = () => { voice.pause(); finish(); };
       caption(item.text, { speaking: true, source: 'tts' });
-      voice.play().then(() => { started = true; }).catch(fallback);
+      voice.play().then(() => { started = true; updateVoiceStatus('cloud', 'Nam Minh · tiếng Việt'); }).catch(fallback);
     });
   }
   async function pump() {
@@ -274,5 +328,5 @@ export function createSound({ onCaption = () => {}, onReady = () => {} } = {}) {
     music?.pause(); if (music) { music.removeAttribute('src'); music.load?.(); }
     context?.close().catch(() => {});
   }
-  return { unlock, setMuted, settings, event, close, get isUnlocked() { return unlocked && !muted; } };
+  return { unlock, setMuted, settings, event, close, get voiceStatus() { return { ...voiceStatus }; }, get isUnlocked() { return unlocked && !muted; } };
 }
